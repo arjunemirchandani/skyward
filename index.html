@@ -572,7 +572,7 @@ function checkRing() {
     // A progress call every fourth gate — often enough to feel watched, rare
     // enough not to crowd the frequency.
     const near = nearestPoint(rings[nextRing].mesh.position.x, rings[nextRing].mesh.position.z);
-    radio(STATION, `${PLAYER_CS}, gate ${nextRing} confirmed, next gate ${near ? near.point.name : 'ahead'}.`, true);
+    atcToPlayer(`${PLAYER_CS}, gate ${nextRing} confirmed, next gate ${near ? near.point.name : 'ahead'}.`);
   }
 }
 
@@ -648,7 +648,7 @@ function respawn() {
 
   if (state.started) {
     prevWarning = '';   // a fresh start should be able to re-issue advisories
-    radio(STATION, `${PLAYER_CS}, radar contact, resume own navigation.`, true);
+    atcToPlayer(`${PLAYER_CS}, radar contact, resume own navigation.`);
   }
 }
 respawn();
@@ -800,7 +800,7 @@ function startGame() {
 
   // Opening clearance, once the first gate exists to name.
   const near = rings.length ? nearestPoint(rings[0].mesh.position.x, rings[0].mesh.position.z) : null;
-  radio(STATION, `${PLAYER_CS}, Skyward Center, radar contact. Cleared for the gate course, ${RING_COUNT} gates, first gate ${near ? near.point.name : 'ahead'}.`, true);
+  atcToPlayer(`${PLAYER_CS}, Skyward Center, radar contact. Cleared for the gate course, ${RING_COUNT} gates, first gate ${near ? near.point.name : 'ahead'}.`);
 }
 startEl.addEventListener('click', startGame);
 
@@ -888,7 +888,7 @@ function finishCourse() {
   tone(660, 0.25, 0.22, 'triangle');
   tone(880, 0.25, 0.22, 'triangle', 0.16);
   tone(1320, 0.55, 0.20, 'triangle', 0.32);
-  radio(STATION, `${PLAYER_CS}, all gates complete, time ${t.toFixed(1)}.${record ? ' New personal best.' : ''}`, true);
+  atcToPlayer(`${PLAYER_CS}, all gates complete, time ${t.toFixed(1)}.${record ? ' New personal best.' : ''}`);
   setTimeout(() => { if (courseDone) newCourse(); }, 4000);
 }
 
@@ -897,7 +897,7 @@ function newCourse() {
   state.time = 0;
   setBanner('<b>NEW COURSE</b>FLY THROUGH THE GOLD RING', 2.2);
   const near = rings.length ? nearestPoint(rings[0].mesh.position.x, rings[0].mesh.position.z) : null;
-  radio(STATION, `${PLAYER_CS}, cleared for the gate course, ${RING_COUNT} gates, first gate ${near ? near.point.name : 'ahead'}.`, true);
+  atcToPlayer(`${PLAYER_CS}, cleared for the gate course, ${RING_COUNT} gates, first gate ${near ? near.point.name : 'ahead'}.`);
 }
 
 // ---- on-screen marker pointing at the next ring
@@ -974,10 +974,19 @@ function compass(yaw) {
   return String(deg).padStart(3, '0');
 }
 
+// Consecutive identical transmissions read as a stuck tape, so the last
+// speaker and the last line are both avoided.
+let lastSpeaker = null;
+let lastLine = '';
+
+function pickFrom(list) { return list[Math.floor(Math.random() * list.length)]; }
+
 // One exchange: an aircraft reports, and sometimes Center answers.
 function emitChatter() {
   if (!traffic.length) return;
-  const a = traffic[Math.floor(Math.random() * traffic.length)];
+
+  let a = pickFrom(traffic);
+  for (let i = 0; i < 6 && a === lastSpeaker && traffic.length > 1; i++) a = pickFrom(traffic);
   const cs = a.callsign;
 
   const here = positionPhrase(a.mesh.position.x, a.mesh.position.z);
@@ -995,14 +1004,19 @@ function emitChatter() {
   }
   if (dest) lines.push(`${feet(a.mesh.position.y)}, direct ${dest}.`);
 
-  radio(cs, lines[Math.floor(Math.random() * lines.length)], false);
+  let line = pickFrom(lines);
+  for (let i = 0; i < 6 && `${cs} ${line}` === lastLine && lines.length > 1; i++) line = pickFrom(lines);
+  lastSpeaker = a;
+  lastLine = `${cs} ${line}`;
+
+  radio(cs, line, false);
 
   if (Math.random() < 0.6) {
     const replies = [`${cs}, roger.`, `${cs}, radar contact.`, `${cs}, altimeter two niner niner two.`];
     if (dest) replies.push(`${cs}, cleared direct ${dest}.`);
     if (here) replies.push(`${cs}, report ${nearestPoint(a.mesh.position.x, a.mesh.position.z).point.name}.`);
     replies.push(`${cs}, maintain ${feet(a.legAlt)}.`);
-    setTimeout(() => radio(STATION, replies[Math.floor(Math.random() * replies.length)], true), 900 + Math.random() * 700);
+    setTimeout(() => radio(STATION, pickFrom(replies), true), 900 + Math.random() * 700);
   }
 }
 
@@ -1021,6 +1035,13 @@ function updateChatter(dt) {
 // ---------------------------------------------------------------------------
 const PLAYER_CS = 'REDTAIL ONE';
 
+// Anything addressed to the player also pushes back the ambient chatter, so a
+// call meant for you is not immediately buried by routine traffic.
+function atcToPlayer(text) {
+  radio(STATION, text, true);
+  chatterTimer = Math.max(chatterTimer, 4.5);
+}
+
 // Advisories repeat only after a decent gap, so a sustained condition does not
 // turn into a stuck record.
 const lastSaid = {};
@@ -1028,7 +1049,7 @@ function atcAdvise(key, text, minGap) {
   const now = clock.elapsedTime;
   if (lastSaid[key] !== undefined && now - lastSaid[key] < minGap) return;
   lastSaid[key] = now;
-  radio(STATION, text, true);
+  atcToPlayer(text);
 }
 
 // Bearing to a target as a clock face: 12 is straight ahead, 3 off the right wing.
@@ -1074,7 +1095,7 @@ function onWarningChange(w) {
   if (!state.started) return;
   if (w === 'TERRAIN') atcAdvise('terrain', `${PLAYER_CS}, low altitude alert, check your altitude.`, 14);
   else if (w === 'LEAVING AREA') atcAdvise('airspace', `${PLAYER_CS}, you are leaving controlled airspace, turn back.`, 16);
-  else if (w === 'CRASHED') radio(STATION, `${PLAYER_CS}, radar contact lost.`, true);
+  else if (w === 'CRASHED') atcToPlayer(`${PLAYER_CS}, radar contact lost.`);
 }
 
 // ---------------------------------------------------------------------------
