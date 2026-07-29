@@ -938,6 +938,68 @@ const bakedMap = (() => {
 // World position -> pixel in the baked map.
 function bakePx(v) { return (v + WORLD / 2) / WORLD * MAP_BAKE; }
 
+// World position -> map pixel, given the current player-centred window.
+function mapPx(x, z, out) {
+  const half = mapSpan / 2;
+  out[0] = (x - (plane.position.x - half)) / mapSpan * MAP_SIZE;
+  out[1] = (z - (plane.position.z - half)) / mapSpan * MAP_SIZE;
+  return out;
+}
+
+const px = [0, 0];
+
+function drawRings(t) {
+  if (!rings.length) return;
+  const c = MAP_SIZE / 2;
+  const PAD = 7;
+
+  // Course line from the player to the ring they are chasing.
+  const active = rings[nextRing];
+  if (active && !courseDone) {
+    mapPx(active.mesh.position.x, active.mesh.position.z, px);
+    mx.save();
+    mx.setLineDash([3, 4]);
+    mx.strokeStyle = 'rgba(255, 210, 87, .5)';
+    mx.lineWidth = 1;
+    mx.beginPath();
+    mx.moveTo(c, c);
+    mx.lineTo(THREE.MathUtils.clamp(px[0], PAD, MAP_SIZE - PAD),
+              THREE.MathUtils.clamp(px[1], PAD, MAP_SIZE - PAD));
+    mx.stroke();
+    mx.restore();
+  }
+
+  for (let i = 0; i < rings.length; i++) {
+    mapPx(rings[i].mesh.position.x, rings[i].mesh.position.z, px);
+    const isNext = i === nextRing && !courseDone;
+    const done = i < nextRing;
+
+    // Rings outside the window get pinned to the border so the course still reads.
+    const offMap = px[0] < PAD || px[0] > MAP_SIZE - PAD || px[1] < PAD || px[1] > MAP_SIZE - PAD;
+    if (offMap && !isNext) continue;
+    const x = THREE.MathUtils.clamp(px[0], PAD, MAP_SIZE - PAD);
+    const y = THREE.MathUtils.clamp(px[1], PAD, MAP_SIZE - PAD);
+
+    if (isNext) {
+      const pulse = 4.5 + Math.sin(t * 5) * 1.5;
+      mx.beginPath();
+      mx.arc(x, y, pulse, 0, Math.PI * 2);
+      mx.strokeStyle = '#ffd257';
+      mx.lineWidth = 2;
+      mx.stroke();
+      mx.beginPath();
+      mx.arc(x, y, 1.6, 0, Math.PI * 2);
+      mx.fillStyle = '#ffd257';
+      mx.fill();
+    } else {
+      mx.beginPath();
+      mx.arc(x, y, done ? 1.8 : 2.6, 0, Math.PI * 2);
+      mx.fillStyle = done ? 'rgba(138, 255, 193, .45)' : 'rgba(47, 212, 255, .9)';
+      mx.fill();
+    }
+  }
+}
+
 // The player sits at the centre of the map, rotated to its heading. North is
 // up, so world +x runs right and world +z runs down the canvas.
 function drawPlayer() {
@@ -975,7 +1037,7 @@ function drawPlayer() {
   mx.restore();
 }
 
-function drawMap() {
+function drawMap(t) {
   mx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
 
   // Anything past the edge of the world stays flat void.
@@ -1001,6 +1063,7 @@ function drawMap() {
     );
   }
 
+  drawRings(t);
   drawPlayer();
 
   // Frame and north marker.
@@ -1188,7 +1251,7 @@ function tick() {
   updateHud();
   updateMarker();
   updateEngine();
-  drawMap();
+  drawMap(t);
 
   renderer.render(scene, camera);
 }
