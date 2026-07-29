@@ -1218,6 +1218,46 @@ function drawRings(t) {
   }
 }
 
+// Island labels. reportingPoints is sorted largest-first, so when labels would
+// collide the more significant landmass keeps its name.
+const LABEL_MAX = 6;
+const placedLabels = [];
+
+function drawPlaceNames() {
+  placedLabels.length = 0;
+  mx.font = '600 8px ui-monospace, Menlo, monospace';
+  mx.textAlign = 'center';
+  mx.textBaseline = 'middle';
+  mx.lineJoin = 'round';
+
+  for (const p of reportingPoints) {
+    if (placedLabels.length >= LABEL_MAX) break;
+
+    mapPx(p.x, p.z, px);
+    const x = px[0], y = px[1];
+    const w = mx.measureText(p.name).width;
+
+    // Reject on the label's own extent, not just the marker, so names never
+    // run off the edge of the map.
+    if (x - w / 2 < 3 || x + w / 2 > MAP_SIZE - 3 || y < 14 || y > MAP_SIZE - 6) continue;
+
+    const box = { x0: x - w / 2 - 2, x1: x + w / 2 + 2, y0: y - 12, y1: y - 1 };
+    if (placedLabels.some(b => !(box.x1 < b.x0 || box.x0 > b.x1 || box.y1 < b.y0 || box.y0 > b.y1))) continue;
+    placedLabels.push(box);
+
+    mx.beginPath();
+    mx.arc(x, y, 1.4, 0, Math.PI * 2);
+    mx.fillStyle = 'rgba(255, 255, 255, .75)';
+    mx.fill();
+
+    mx.strokeStyle = 'rgba(6, 16, 24, .85)';
+    mx.lineWidth = 2.5;
+    mx.strokeText(p.name, x, y - 6);
+    mx.fillStyle = 'rgba(238, 250, 255, .92)';
+    mx.fillText(p.name, x, y - 6);
+  }
+}
+
 // Traffic contacts, drawn like a radar return: pointed along their heading and
 // tinted by whether they are above or below you.
 function drawTraffic() {
@@ -1317,6 +1357,8 @@ function drawMap(t) {
       cx0 * scale, cy0 * scale, (cx1 - cx0) * scale, (cy1 - cy0) * scale
     );
   }
+
+  drawPlaceNames();
 
   // Range circle at a quarter of the span, as a distance reference.
   mx.beginPath();
