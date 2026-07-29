@@ -52,6 +52,13 @@
   #reticle:before { left: 0; right: 0; top: 50%; height: 1px; }
   #reticle:after  { top: 0; bottom: 0; left: 50%; width: 1px; }
 
+  #mapPanel { right: 18px; bottom: 18px; padding: 8px; line-height: 0; }
+  #map { display: block; width: 188px; height: 188px; border-radius: 4px; }
+  #mapScale {
+    line-height: 1.4; margin-top: 6px; text-align: center;
+    font-size: 10px; letter-spacing: 1px; opacity: .55;
+  }
+
   #marker {
     position: absolute; left: 0; top: 0; width: 54px; height: 54px;
     opacity: 0; transition: opacity .2s;
@@ -123,6 +130,11 @@
     <div class="row"><span class="k">NEXT</span><span class="v" id="next">—</span></div>
     <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
     <div class="row"><span class="k">BEST</span><span class="v" id="best">—</span></div>
+  </div>
+
+  <div class="panel" id="mapPanel">
+    <canvas id="map" width="188" height="188"></canvas>
+    <div id="mapScale">—</div>
   </div>
 
   <div id="warn"></div>
@@ -853,6 +865,45 @@ function flash() {
 }
 
 // ---------------------------------------------------------------------------
+// Minimap
+// ---------------------------------------------------------------------------
+const MAP_SIZE = 188;                 // on-screen size, CSS pixels
+const mapCanvas = document.getElementById('map');
+const mapScaleEl = document.getElementById('mapScale');
+const mx = mapCanvas.getContext('2d');
+
+// Back the canvas with real device pixels so the map stays sharp.
+{
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  mapCanvas.width = MAP_SIZE * dpr;
+  mapCanvas.height = MAP_SIZE * dpr;
+  mx.scale(dpr, dpr);
+}
+
+let mapSpan = 5000;                   // world units visible across the map
+
+function drawMap() {
+  mx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+
+  // Placeholder ground until the terrain map is baked in.
+  mx.fillStyle = '#0d2b40';
+  mx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
+
+  // Frame and north marker.
+  mx.strokeStyle = 'rgba(140, 230, 255, .35)';
+  mx.lineWidth = 1;
+  mx.strokeRect(0.5, 0.5, MAP_SIZE - 1, MAP_SIZE - 1);
+
+  mx.fillStyle = 'rgba(205, 246, 255, .75)';
+  mx.font = '600 9px ui-monospace, Menlo, monospace';
+  mx.textAlign = 'center';
+  mx.textBaseline = 'top';
+  mx.fillText('N', MAP_SIZE / 2, 5);
+
+  mapScaleEl.textContent = (mapSpan / 1000).toFixed(1) + ' km';
+}
+
+// ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
 const fwd = new THREE.Vector3();
@@ -1023,6 +1074,7 @@ function tick() {
   updateHud();
   updateMarker();
   updateEngine();
+  drawMap();
 
   renderer.render(scene, camera);
 }
