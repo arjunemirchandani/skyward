@@ -1495,14 +1495,25 @@ function newCourse() {
 
 // ---- on-screen marker pointing at the next ring
 const ndc = new THREE.Vector3();
-function updateMarker() {
-  const ring = rings[nextRing];
-  if (!ring || courseDone || !state.started) { el.marker.classList.remove('on'); return; }
+const markerTarget = new THREE.Vector3();
 
-  const dist = plane.position.distanceTo(ring.mesh.position);
+function updateMarker() {
+  // Once the gates are behind you on a mission, the thing worth pointing at is
+  // the field you were sent to.
+  let has = false;
+  if (mission.active && mission.phase === 'arrival') {
+    markerTarget.set(mission.dest.x, mission.dest.elev + 60, mission.dest.z);
+    has = true;
+  } else {
+    const ring = rings[nextRing];
+    if (ring && !courseDone) { markerTarget.copy(ring.mesh.position); has = true; }
+  }
+  if (!has || !state.started || state.onGround) { el.marker.classList.remove('on'); return; }
+
+  const dist = plane.position.distanceTo(markerTarget);
   el.markerDist.textContent = Math.round(dist) + 'm';
 
-  ndc.copy(ring.mesh.position).project(camera);
+  ndc.copy(markerTarget).project(camera);
   const behind = ndc.z > 1;
   let x = ndc.x, y = ndc.y;
   if (behind) { x = -x; y = -y; }
@@ -3095,7 +3106,7 @@ window.SKYWARD = {
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
-  updateFlight, updateHud, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
+  updateFlight, updateHud, updateMarker, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
   preferredEnd, windsocks, updateWindsocks,
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
