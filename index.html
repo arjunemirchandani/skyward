@@ -189,7 +189,8 @@
     Q / E &nbsp; rudder<br>
     &uarr; / &darr; &nbsp; throttle<br>
     C camera &nbsp;&middot;&nbsp; R respawn<br>
-    N new course &nbsp;&middot;&nbsp; M mute<br>
+    B &nbsp; new mission<br>
+    N free course &nbsp;&middot;&nbsp; M mute<br>
     Z &nbsp; map zoom<br>
     SPACE &nbsp; brakes (on ground)
   </div>
@@ -270,11 +271,13 @@
       <tr><td>&uarr; / &darr;</td><td>throttle</td></tr>
       <tr><td>C</td><td>chase / cockpit view</td></tr>
       <tr><td>R</td><td>respawn</td></tr>
-      <tr><td>N / M</td><td>new course / mute</td></tr>
+      <tr><td>B</td><td>new mission</td></tr>
+      <tr><td>N / M</td><td>free gate course / mute</td></tr>
       <tr><td>Z</td><td>minimap zoom</td></tr>
       <tr><td>SPACE</td><td>wheel brakes on the ground</td></tr>
     </table>
-    <div class="sub" style="letter-spacing:2px;margin-bottom:18px">FLY THROUGH ALL 12 GOLD RINGS &mdash; BEAT YOUR TIME</div>
+    <div class="sub" style="letter-spacing:2px;margin-bottom:6px">PRESS <b style="color:#8affc1">B</b> FOR A MISSION &mdash; TAKE OFF, FLY THE GATES, LAND AT THE FIELD</div>
+    <div class="sub" style="letter-spacing:2px;margin-bottom:18px;opacity:.5">OR JUST FLY &mdash; N FOR A FREE GATE COURSE</div>
     <div class="go">PRESS ANY KEY TO FLY</div>
   </div>
 </div>
@@ -1186,10 +1189,17 @@ function respawn() {
   const p = START.clone();
   const aim = new THREE.Vector3(0, 0, 0);
 
-  const target = rings[nextRing];
-  if (target && !courseDone) {
-    // Mid-course: put the player back on approach instead of across the map.
-    const to = target.mesh.position;
+  // What are we heading for? On a mission that is the next gate, or the
+  // destination field once the gates are behind us.
+  let to = null;
+  if (mission.active && (mission.phase === 'arrival' || nextRing >= rings.length)) {
+    to = new THREE.Vector3(mission.dest.x, 0, mission.dest.z);
+  } else if (rings[nextRing] && !courseDone) {
+    to = rings[nextRing].mesh.position;
+  }
+
+  if (to) {
+    // Put the player back on approach instead of across the map.
     const back = new THREE.Vector3(plane.position.x - to.x, 0, plane.position.z - to.z);
     if (back.lengthSq() < 1) back.set(0, 0, 1);
     back.normalize();
