@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Skyward</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0f16; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed; inset: 0; pointer-events: none;
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #cdf6ff; text-shadow: 0 0 8px rgba(0,0,0,.9), 0 0 2px rgba(0,0,0,1);
+    user-select: none;
+  }
+  .panel {
+    position: absolute; padding: 10px 14px;
+    background: rgba(6, 18, 28, .38);
+    border: 1px solid rgba(140, 230, 255, .22);
+    border-radius: 8px;
+    backdrop-filter: blur(3px);
+  }
+  #left  { left: 18px;  bottom: 18px; min-width: 190px; }
+  #right { right: 18px; top: 18px; min-width: 170px; text-align: right; }
+  #help  { left: 18px;  top: 18px; opacity: .72; line-height: 1.65; }
+
+  .row { display: flex; justify-content: space-between; gap: 14px; }
+  .k { opacity: .6; }
+  .v { font-variant-numeric: tabular-nums; font-weight: 600; color: #eafcff; }
+  .big { font-size: 22px; letter-spacing: .5px; }
+
+  .bar { height: 6px; margin-top: 8px; background: rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg,#3fd0ff,#8affc1); transition: width .08s linear; }
+
+  #warn {
+    position: absolute; left: 50%; top: 24%; transform: translateX(-50%);
+    color: #ffdf6b; font-size: 15px; letter-spacing: 2px; text-align: center;
+    opacity: 0; transition: opacity .18s;
+  }
+  #warn.on { opacity: 1; }
+
+  #reticle {
+    position: absolute; left: 50%; top: 50%; width: 44px; height: 44px;
+    margin: -22px 0 0 -22px; opacity: .5;
+  }
+  #reticle:before, #reticle:after {
+    content: ""; position: absolute; background: #cdf6ff;
+  }
+  #reticle:before { left: 0; right: 0; top: 50%; height: 1px; }
+  #reticle:after  { top: 0; bottom: 0; left: 50%; width: 1px; }
+
+  #flash {
+    position: fixed; inset: 0; background: #ff8a3d; opacity: 0;
+    pointer-events: none; transition: opacity .35s ease-out;
+  }
+
+  #start {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(120% 90% at 50% 0%, rgba(30,95,168,.55), rgba(6,12,20,.92));
+    font: 14px/1.7 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #cdf6ff;
+    text-align: center; z-index: 5; transition: opacity .4s;
+  }
+  #start.hidden { opacity: 0; pointer-events: none; }
+  #start h1 {
+    margin: 0 0 6px; font-size: 54px; letter-spacing: 14px; font-weight: 300;
+    color: #eafcff; text-shadow: 0 0 40px rgba(90,200,255,.6);
+  }
+  #start .sub { opacity: .7; letter-spacing: 3px; margin-bottom: 26px; }
+  #start table { margin: 0 auto 26px; border-collapse: collapse; }
+  #start td { padding: 3px 12px; }
+  #start td:first-child { text-align: right; color: #8affc1; }
+  #start td:last-child { text-align: left; opacity: .8; }
+  #start .go { letter-spacing: 4px; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="panel" id="help">
+    W / S &nbsp; pitch<br>
+    A / D &nbsp; roll<br>
+    Q / E &nbsp; rudder<br>
+    &uarr; / &darr; &nbsp; throttle<br>
+    C &nbsp; camera &nbsp;&middot;&nbsp; R &nbsp; respawn
+  </div>
+
+  <div class="panel" id="left">
+    <div class="row"><span class="k">SPD</span><span class="v big" id="spd">0</span></div>
+    <div class="row"><span class="k">ALT</span><span class="v" id="alt">0</span></div>
+    <div class="row"><span class="k">HDG</span><span class="v" id="hdg">000</span></div>
+    <div class="row" style="margin-top:6px"><span class="k">THR</span><span class="v" id="thr">0%</span></div>
+    <div class="bar"><i id="thrbar"></i></div>
+  </div>
+
+  <div class="panel" id="right">
+    <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
+  </div>
+
+  <div id="warn"></div>
+  <div id="reticle"></div>
+</div>
+
+<div id="flash"></div>
+
+<div id="start">
+  <div>
+    <h1>SKYWARD</h1>
+    <div class="sub">ARCADE FLIGHT</div>
+    <table>
+      <tr><td>W / S</td><td>pitch down / up</td></tr>
+      <tr><td>A / D</td><td>roll left / right</td></tr>
+      <tr><td>Q / E</td><td>rudder</td></tr>
+      <tr><td>&uarr; / &darr;</td><td>throttle</td></tr>
+      <tr><td>C</td><td>chase / cockpit view</td></tr>
+      <tr><td>R</td><td>respawn</td></tr>
+    </table>
+    <div class="go">PRESS ANY KEY TO FLY</div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.161.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ---------------------------------------------------------------------------
+// Tunables
+// ---------------------------------------------------------------------------
+const WORLD      = 14000;   // terrain extent, world units
+const SEGMENTS   = 300;     // terrain resolution
+const SEA_LEVEL  = 0;
+
+const MAX_SPEED   = 340;    // units/s at full throttle, level flight
+const MIN_SPEED   = 28;
+const STALL_SPEED = 62;
+const THRUST_K    = 0.55;   // how fast speed chases its target
+const GRAVITY     = 145;    // speed traded for altitude
+
+const PITCH_RATE = 1.15;    // rad/s
+const ROLL_RATE  = 1.85;
+const YAW_RATE   = 0.55;
+const BANK_TURN  = 1.40;    // banked-turn coupling
+
+// ---------------------------------------------------------------------------
+// Renderer / scene
+// ---------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const HORIZON = new THREE.Color(0xbcdff5);
+scene.fog = new THREE.Fog(HORIZON, 2200, 11000);
+
+const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.5, 26000);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------------------------------------------------------------------------
+// Sky dome
+// ---------------------------------------------------------------------------
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(16000, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: {
+      uTop:    { value: new THREE.Color(0x1d5fa8) },
+      uBottom: { value: HORIZON.clone() },
+      uSun:    { value: new THREE.Vector3(0.45, 0.55, 0.7).normalize() }
+    },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform vec3 uTop, uBottom, uSun;
+      varying vec3 vDir;
+      void main() {
+        float h = pow(clamp(vDir.y * 1.15 + 0.05, 0.0, 1.0), 0.62);
+        vec3 col = mix(uBottom, uTop, h);
+        float sun = pow(max(dot(normalize(vDir), uSun), 0.0), 220.0);
+        float glow = pow(max(dot(normalize(vDir), uSun), 0.0), 7.0) * 0.28;
+        col += vec3(1.0, 0.95, 0.82) * (sun + glow);
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  })
+);
+sky.frustumCulled = false;
+scene.add(sky);
+
+// ---------------------------------------------------------------------------
+// Lighting
+// ---------------------------------------------------------------------------
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+
+const sun = new THREE.DirectionalLight(0xfff4e2, 2.6);
+sun.position.set(0.45, 0.55, 0.7).multiplyScalar(3000);
+scene.add(sun);
+// Fill from a second, dimmer angle so slopes facing away from the sun still read.
+const fill = new THREE.DirectionalLight(0xcfe6ff, 0.7);
+fill.position.set(-0.6, 0.35, -0.5).multiplyScalar(3000);
+scene.add(fill);
+scene.add(new THREE.HemisphereLight(0xcbe7fb, 0x6d7a5c, 1.9));
+
+// ---------------------------------------------------------------------------
+// Terrain
+// ---------------------------------------------------------------------------
+function hash2(x, y) {
+  let h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return h - Math.floor(h);
+}
+function smooth(t) { return t * t * (3 - 2 * t); }
+function noise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = smooth(x - xi), yf = smooth(y - yi);
+  const a = hash2(xi, yi),         b = hash2(xi + 1, yi);
+  const c = hash2(xi, yi + 1),     d = hash2(xi + 1, yi + 1);
+  return (a + (b - a) * xf) * (1 - yf) + (c + (d - c) * xf) * yf;
+}
+function fbm(x, y, octaves) {
+  let sum = 0, amp = 0.5, freq = 1, norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += noise2(x * freq, y * freq) * amp;
+    norm += amp;
+    amp *= 0.5; freq *= 2.03;
+  }
+  return sum / norm;
+}
+
+// Signed height of the land at a world position. Negative = below sea level.
+function terrainHeight(x, z) {
+  const continent = fbm(x * 0.00034 + 11.3, z * 0.00034 - 4.7, 5);
+  let h = (continent - 0.44) * 2400;
+
+  // Mountain ridges only where there is already land.
+  const landMask = Math.max(0, Math.min(1, h / 260));
+  const r = 1 - Math.abs(fbm(x * 0.00062 + 61.5, z * 0.00062 + 19.2, 4) * 2 - 1);
+  h += r * r * 820 * landMask;
+
+  // Surface detail.
+  h += (fbm(x * 0.0052 - 33.0, z * 0.0052 + 88.0, 3) - 0.5) * 40 * (0.35 + landMask);
+
+  return Math.max(h, -160);
+}
+
+const SAND = new THREE.Color(0xd9c89a);
+const GRASS = new THREE.Color(0x4f7a3c);
+const FOREST = new THREE.Color(0x33532b);
+const ROCK = new THREE.Color(0x7a7166);
+const SNOW = new THREE.Color(0xf2f6f8);
+
+function terrainColor(h, slope, target) {
+  if (h < 12) { target.copy(SAND); }
+  else if (h < 420) { target.copy(GRASS).lerp(FOREST, Math.min(1, h / 460)); }
+  else if (h < 900) { target.copy(FOREST).lerp(ROCK, (h - 420) / 480); }
+  else { target.copy(ROCK).lerp(SNOW, Math.min(1, (h - 900) / 300)); }
+  if (slope > 0.6 && h > 16) target.lerp(ROCK, Math.min(1, (slope - 0.6) * 2.0));
+  return target;
+}
+
+const terrainGeo = new THREE.PlaneGeometry(WORLD, WORLD, SEGMENTS, SEGMENTS);
+terrainGeo.rotateX(-Math.PI / 2);
+{
+  const pos = terrainGeo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  const step = WORLD / SEGMENTS;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = terrainHeight(x, z);
+    pos.setY(i, h);
+    const dx = terrainHeight(x + step, z) - h;
+    const dz = terrainHeight(x, z + step) - h;
+    const slope = Math.min(1, Math.hypot(dx, dz) / step);
+    terrainColor(h, slope, c);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  terrainGeo.computeVertexNormals();
+}
+const terrain = new THREE.Mesh(
+  terrainGeo,
+  new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: false })
+);
+scene.add(terrain);
+
+// Ocean
+const ocean = new THREE.Mesh(
+  new THREE.PlaneGeometry(WORLD * 2.4, WORLD * 2.4, 1, 1).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({
+    color: 0x2b6f9c, roughness: 0.32, metalness: 0.05,
+    transparent: true, opacity: 0.92
+  })
+);
+ocean.position.y = SEA_LEVEL;
+scene.add(ocean);
+
+// ---------------------------------------------------------------------------
+// Clouds — soft billboards
+// ---------------------------------------------------------------------------
+function cloudTexture() {
+  const s = 128, cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d');
+  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grd.addColorStop(0.0, 'rgba(255,255,255,0.95)');
+  grd.addColorStop(0.45, 'rgba(255,255,255,0.55)');
+  grd.addColorStop(1.0, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, s, s);
+  return new THREE.CanvasTexture(cv);
+}
+{
+  const tex = cloudTexture();
+  const clouds = new THREE.Group();
+  for (let i = 0; i < 340; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false,
+      opacity: 0.30 + Math.random() * 0.35,
+      color: new THREE.Color().setHSL(0.58, 0.15, 0.92 + Math.random() * 0.08)
+    });
+    const sp = new THREE.Sprite(mat);
+    const s = 260 + Math.random() * 620;
+    sp.scale.set(s, s * (0.45 + Math.random() * 0.25), 1);
+    sp.position.set(
+      (Math.random() - 0.5) * WORLD * 1.4,
+      620 + Math.random() * 1400,
+      (Math.random() - 0.5) * WORLD * 1.4
+    );
+    clouds.add(sp);
+  }
+  scene.add(clouds);
+}
+
+// ---------------------------------------------------------------------------
+// Aircraft
+// ---------------------------------------------------------------------------
+function buildPlane() {
+  const g = new THREE.Group();
+  const body = new THREE.MeshStandardMaterial({ color: 0xe8352e, roughness: 0.45, metalness: 0.25 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0xf2f4f7, roughness: 0.5, metalness: 0.15 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2f38, roughness: 0.6, metalness: 0.35 });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x9fdcff, roughness: 0.08, metalness: 0.6, transparent: true, opacity: 0.62
+  });
+
+  // Fuselage (nose points down -Z)
+  const fus = new THREE.Mesh(new THREE.CapsuleGeometry(0.62, 4.2, 6, 14), body);
+  fus.rotation.x = Math.PI / 2;
+  fus.position.z = -0.2;
+  g.add(fus);
+
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.62, 1.5, 16), body);
+  nose.rotation.x = -Math.PI / 2;
+  nose.position.z = -3.05;
+  g.add(nose);
+
+  const spinner = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.7, 12), dark);
+  spinner.rotation.x = -Math.PI / 2;
+  spinner.position.z = -3.9;
+  g.add(spinner);
+
+  const prop = new THREE.Mesh(new THREE.BoxGeometry(0.16, 5.2, 0.06), dark);
+  prop.position.z = -4.1;
+  g.add(prop);
+
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), glass);
+  canopy.scale.set(1, 0.9, 1.9);
+  canopy.position.set(0, 0.42, -0.5);
+  g.add(canopy);
+
+  // Wings
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(11.4, 0.22, 1.9), trim);
+  wing.position.set(0, 0.1, -0.4);
+  g.add(wing);
+
+  for (const s of [-1, 1]) {
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.2, 1.7), body);
+    tip.position.set(s * 5.7, 0.1, -0.4);
+    g.add(tip);
+  }
+
+  // Tail
+  const stab = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.18, 1.1), trim);
+  stab.position.set(0, 0.22, 3.0);
+  g.add(stab);
+
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.5, 1.3), body);
+  fin.position.set(0, 0.95, 3.1);
+  g.add(fin);
+
+  // Gear pods
+  for (const s of [-1, 1]) {
+    const pod = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.5, 4, 8), dark);
+    pod.position.set(s * 1.9, -0.55, -0.3);
+    g.add(pod);
+  }
+
+  g.userData.prop = prop;
+  return g;
+}
+
+const plane = buildPlane();
+scene.add(plane);
+
+// ---------------------------------------------------------------------------
+// Flight state
+// ---------------------------------------------------------------------------
+const state = {
+  speed: 190,
+  throttle: 0.75,
+  vel: new THREE.Vector3(),
+  crashed: false,
+  crashT: 0,
+  time: 0,
+  started: false
+};
+
+const START = new THREE.Vector3(0, 900, 2200);
+
+function respawn() {
+  // Drop the player somewhere with land underneath, facing the middle of the map.
+  let p = START.clone();
+  for (let i = 0; i < 60; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.random() * WORLD * 0.3;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (terrainHeight(x, z) > 60) { p.set(x, terrainHeight(x, z) + 700, z); break; }
+  }
+  plane.position.copy(p);
+  plane.quaternion.identity();
+  plane.rotateY(Math.atan2(-p.x, -p.z) + Math.PI);
+  state.speed = 190;
+  state.throttle = 0.75;
+  state.crashed = false;
+  state.crashT = 0;
+}
+respawn();
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+const keys = new Set();
+const TRACKED = new Set([
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC',
+  'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
+]);
+
+addEventListener('keydown', (e) => {
+  if (!state.started) startGame();
+  if (TRACKED.has(e.code)) { keys.add(e.code); e.preventDefault(); }
+  if (e.code === 'KeyR') respawn();
+  if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
+});
+addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+const startEl = document.getElementById('start');
+function startGame() {
+  state.started = true;
+  state.time = 0;
+  startEl.classList.add('hidden');
+}
+startEl.addEventListener('click', startGame);
+
+// ---------------------------------------------------------------------------
+// Camera
+// ---------------------------------------------------------------------------
+let cameraMode = 0; // 0 chase, 1 cockpit
+const camPos = new THREE.Vector3();
+const camUp = new THREE.Vector3(0, 1, 0);
+const lookAt = new THREE.Vector3();
+
+const CHASE_OFFSET = new THREE.Vector3(0, 3.4, 15.5);
+const COCKPIT_OFFSET = new THREE.Vector3(0, 0.95, -0.4);
+
+function updateCamera(dt, fwd, up) {
+  if (cameraMode === 1) {
+    camera.position.copy(plane.localToWorld(COCKPIT_OFFSET.clone()));
+    camera.quaternion.copy(plane.quaternion);
+  } else {
+    const target = plane.localToWorld(CHASE_OFFSET.clone());
+    const k = 1 - Math.exp(-7 * dt);
+    camera.position.lerp(target, k);
+    // Blend the roll in so banking reads on screen without making it nauseating.
+    camUp.lerp(up.clone().lerp(new THREE.Vector3(0, 1, 0), 0.35).normalize(), k);
+    camera.up.copy(camUp);
+    lookAt.copy(plane.position).addScaledVector(fwd, 26);
+    camera.lookAt(lookAt);
+  }
+  const targetFov = (cameraMode === 1 ? 68 : 60) + (state.speed / MAX_SPEED) * 16;
+  camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-4 * dt));
+  camera.updateProjectionMatrix();
+}
+
+// ---------------------------------------------------------------------------
+// HUD
+// ---------------------------------------------------------------------------
+const el = {
+  spd: document.getElementById('spd'),
+  alt: document.getElementById('alt'),
+  hdg: document.getElementById('hdg'),
+  thr: document.getElementById('thr'),
+  thrbar: document.getElementById('thrbar'),
+  time: document.getElementById('time'),
+  warn: document.getElementById('warn'),
+  flash: document.getElementById('flash')
+};
+
+function setWarn(text) {
+  if (text) { el.warn.textContent = text; el.warn.classList.add('on'); }
+  else el.warn.classList.remove('on');
+}
+
+function flash() {
+  el.flash.style.transition = 'none';
+  el.flash.style.opacity = '0.85';
+  requestAnimationFrame(() => {
+    el.flash.style.transition = 'opacity .5s ease-out';
+    el.flash.style.opacity = '0';
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Simulation
+// ---------------------------------------------------------------------------
+const fwd = new THREE.Vector3();
+const up = new THREE.Vector3();
+const right = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const tmpQ = new THREE.Quaternion();
+const tmpE = new THREE.Euler();
+
+function axes() {
+  fwd.set(0, 0, -1).applyQuaternion(plane.quaternion);
+  up.set(0, 1, 0).applyQuaternion(plane.quaternion);
+  right.set(1, 0, 0).applyQuaternion(plane.quaternion);
+}
+
+function updateFlight(dt) {
+  axes();
+
+  if (state.crashed) {
+    state.crashT += dt;
+    // Tumble down to the ground, then put the player back in the air.
+    plane.rotateX(2.4 * dt);
+    plane.rotateZ(1.7 * dt);
+    plane.position.y -= 60 * dt;
+    if (state.crashT > 1.6) respawn();
+    return;
+  }
+
+  // ---- controls
+  const held = (c) => keys.has(c) ? 1 : 0;
+  // Authority falls off at low airspeed — control surfaces need air over them.
+  const auth = Math.min(1, Math.max(0.18, state.speed / 130));
+
+  const pitchIn = held('KeyS') - held('KeyW');
+  let   rollIn  = held('KeyA') - held('KeyD');
+  const yawIn   = held('KeyQ') - held('KeyE');
+
+  // Hands off the stick, the wings drift back to level — only while upright,
+  // so deliberate inverted flight still holds.
+  if (rollIn === 0) rollIn = -right.y * Math.max(0, up.y) * 0.85;
+
+  tmpE.set(pitchIn * PITCH_RATE * auth * dt,
+           yawIn   * YAW_RATE   * auth * dt,
+           rollIn  * ROLL_RATE  * auth * dt, 'XYZ');
+  plane.quaternion.multiply(tmpQ.setFromEuler(tmpE));
+
+  // Banking turns the nose — the thing that makes arcade flight feel right.
+  axes();
+  plane.rotateOnWorldAxis(WORLD_UP, right.y * BANK_TURN * auth * dt);
+
+  // ---- throttle
+  if (keys.has('ArrowUp'))   state.throttle = Math.min(1, state.throttle + 0.55 * dt);
+  if (keys.has('ArrowDown')) state.throttle = Math.max(0, state.throttle - 0.55 * dt);
+
+  // ---- speed: engine thrust, drag, and the gravity/energy trade
+  axes();
+  const target = MIN_SPEED + state.throttle * (MAX_SPEED - MIN_SPEED);
+  state.speed += (target - state.speed) * THRUST_K * dt;
+  state.speed -= fwd.y * GRAVITY * dt;
+  state.speed = Math.max(0, Math.min(MAX_SPEED * 1.25, state.speed));
+
+  // ---- stall: below flying speed the nose drops and the plane sinks
+  let sink = 0;
+  if (state.speed < STALL_SPEED) {
+    const s = (STALL_SPEED - state.speed) / STALL_SPEED;
+    sink = s * 130;
+    plane.rotateOnWorldAxis(right.clone().setY(0).normalize(), -s * 1.6 * dt);
+    setWarn('STALL');
+  } else if (plane.position.y - terrainHeight(plane.position.x, plane.position.z) < 130 && fwd.y < 0.05) {
+    setWarn('TERRAIN');
+  } else {
+    setWarn('');
+  }
+
+  // ---- integrate
+  state.vel.copy(fwd).multiplyScalar(state.speed).addScaledVector(WORLD_UP, -sink);
+  plane.position.addScaledVector(state.vel, dt);
+
+  // ---- soft boundary: turn the player back toward the middle of the map
+  const edge = WORLD * 0.52;
+  const d = Math.max(Math.abs(plane.position.x), Math.abs(plane.position.z));
+  if (d > edge) {
+    const push = Math.min(1, (d - edge) / 900);
+    const home = new THREE.Vector3(-plane.position.x, 0, -plane.position.z).normalize();
+    const cross = fwd.clone().cross(home).y;
+    plane.rotateOnWorldAxis(WORLD_UP, Math.sign(cross) * push * 0.9 * dt);
+    setWarn('LEAVING AREA');
+  }
+  if (plane.position.y > 4200) {
+    plane.position.y = 4200;
+    state.speed *= 0.985;
+  }
+
+  // ---- ground / water collision
+  const groundY = Math.max(terrainHeight(plane.position.x, plane.position.z), SEA_LEVEL);
+  if (plane.position.y - 1.2 < groundY) {
+    crash();
+  }
+
+  // ---- prop spin
+  plane.userData.prop.rotation.z += (6 + state.throttle * 46) * dt;
+}
+
+function crash() {
+  if (state.crashed) return;
+  state.crashed = true;
+  state.crashT = 0;
+  state.speed *= 0.25;
+  setWarn('CRASHED');
+  flash();
+}
+
+function updateHud() {
+  const alt = plane.position.y - Math.max(terrainHeight(plane.position.x, plane.position.z), SEA_LEVEL);
+  el.spd.textContent = Math.round(state.speed);
+  el.alt.textContent = Math.round(alt);
+  const hdg = (Math.round(THREE.MathUtils.radToDeg(Math.atan2(fwd.x, -fwd.z))) + 360) % 360;
+  el.hdg.textContent = String(hdg).padStart(3, '0');
+  el.thr.textContent = Math.round(state.throttle * 100) + '%';
+  el.thrbar.style.width = (state.throttle * 100) + '%';
+  el.time.textContent = state.time.toFixed(1);
+}
+
+// ---------------------------------------------------------------------------
+// Loop
+// ---------------------------------------------------------------------------
+const clock = new THREE.Clock();
+
+// Dev handle — poke at the sim from the console.
+window.SKYWARD = { state, plane, keys, camera, scene, THREE, terrainHeight, respawn };
+
+function tick() {
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (state.started) {
+    state.time += dt;
+    updateFlight(dt);
+  } else {
+    // Idle fly-by while the title card is up.
+    axes();
+    plane.rotateOnWorldAxis(WORLD_UP, 0.12 * dt);
+    plane.position.addScaledVector(fwd, 150 * dt);
+    plane.userData.prop.rotation.z += 20 * dt;
+  }
+
+  updateCamera(dt, fwd, up);
+  sky.position.copy(camera.position);
+  ocean.position.x = camera.position.x;
+  ocean.position.z = camera.position.z;
+  updateHud();
+
+  renderer.render(scene, camera);
+}
+tick();
+</script>
+</body>
+</html>
