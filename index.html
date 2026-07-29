@@ -190,6 +190,7 @@
     <div class="row"><span class="k">SPD</span><span class="v big" id="spd">0</span></div>
     <div class="row"><span class="k">ALT</span><span class="v" id="alt">0</span></div>
     <div class="row"><span class="k">HDG</span><span class="v" id="hdg">000</span></div>
+    <div class="row"><span class="k">WIND</span><span class="v" id="wind">—</span></div>
     <div class="row" style="margin-top:6px"><span class="k">THR</span><span class="v" id="thr">0%</span></div>
     <div class="bar"><i id="thrbar"></i></div>
   </div>
@@ -686,6 +687,32 @@ function cloudTexture() {
 }
 
 // ---------------------------------------------------------------------------
+// Wind
+// ---------------------------------------------------------------------------
+// Reported the way pilots report it: the direction the wind blows FROM. The
+// velocity vector therefore points the opposite way.
+const WIND_FROM = Math.random() * Math.PI * 2;
+const WIND_BASE = 6 + Math.random() * 12;   // strong enough to matter, mild enough to fly
+
+const wind = {
+  from: WIND_FROM,          // radians, meteorological
+  speed: WIND_BASE,         // units/s including gust
+  vec: new THREE.Vector3()  // where the air is actually going
+};
+
+function updateWind(t) {
+  // Slow meander in direction, faster variation in strength for gusts.
+  wind.from = WIND_FROM + (noise2(t * 0.013, 3.7) - 0.5) * 1.1;
+  wind.speed = WIND_BASE * (0.7 + noise2(t * 0.085, 17.2) * 0.75);
+  wind.vec.set(-Math.sin(wind.from), 0, Math.cos(wind.from)).multiplyScalar(wind.speed);
+}
+updateWind(0);
+
+function windCompass() {
+  return String(Math.round(((THREE.MathUtils.radToDeg(wind.from) % 360) + 360) % 360)).padStart(3, '0');
+}
+
+// ---------------------------------------------------------------------------
 // Aircraft
 // ---------------------------------------------------------------------------
 function buildPlane() {
@@ -1114,6 +1141,7 @@ const el = {
   spd: document.getElementById('spd'),
   alt: document.getElementById('alt'),
   hdg: document.getElementById('hdg'),
+  wind: document.getElementById('wind'),
   thr: document.getElementById('thr'),
   thrbar: document.getElementById('thrbar'),
   time: document.getElementById('time'),
@@ -1938,8 +1966,10 @@ function updateFlight(dt) {
   }
 
   // ---- integrate
+  // state.speed is airspeed; the ground track is that plus whatever the air
+  // itself is doing, which is where drift on approach comes from.
   prevPos.copy(plane.position);
-  state.vel.copy(fwd).multiplyScalar(state.speed).addScaledVector(WORLD_UP, -sink);
+  state.vel.copy(fwd).multiplyScalar(state.speed).addScaledVector(WORLD_UP, -sink).add(wind.vec);
   plane.position.addScaledVector(state.vel, dt);
   checkRing();
 
@@ -2000,6 +2030,7 @@ function updateHud() {
   el.alt.textContent = Math.round(alt);
   const hdg = (Math.round(THREE.MathUtils.radToDeg(Math.atan2(fwd.x, -fwd.z))) + 360) % 360;
   el.hdg.textContent = String(hdg).padStart(3, '0');
+  el.wind.textContent = `${windCompass()}/${Math.round(wind.speed)}`;
   el.thr.textContent = Math.round(state.throttle * 100) + '%';
   el.thrbar.style.width = (state.throttle * 100) + '%';
   el.time.textContent = state.time.toFixed(1);
@@ -2484,7 +2515,8 @@ function scanTraffic(dt) {
 
     // Closing, or merely sharing the sky? Separating traffic is not a threat.
     relPos.subVectors(p, plane.position);
-    relVel.set(Math.sin(a.yaw) * a.speed, a.vy, -Math.cos(a.yaw) * a.speed).sub(state.vel);
+    // Both aircraft are in the same air, so wind belongs on both sides here.
+    relVel.set(Math.sin(a.yaw) * a.speed, a.vy, -Math.cos(a.yaw) * a.speed).add(wind.vec).sub(state.vel);
     if (relPos.dot(relVel) >= 0) continue;
 
     if (d < conflictDist) { conflictDist = d; threat = a; }
@@ -2614,7 +2646,9 @@ function updateTraffic(dt) {
     a.vy += (wantVy - a.vy) * (1 - Math.exp(-1.2 * dt));
 
     // ---- integrate and rebuild the attitude from yaw / pitch / bank
+    // Traffic flies in the same moving air, and its autopilot corrects for it.
     p.addScaledVector(tFwd, a.speed * dt);
+    p.addScaledVector(wind.vec, dt);
     p.y += a.vy * dt;
 
     // Last-resort clamp: routing should have avoided this, but an aircraft must
@@ -2646,7 +2680,7 @@ window.SKYWARD = {
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
-  updateFlight, approachInfo, updateApproach, updateGlints, glints,
+  updateFlight, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -2658,6 +2692,7 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   const t = clock.elapsedTime;
+  updateWind(t);
   updateTraffic(dt);
 
   if (state.started) {
