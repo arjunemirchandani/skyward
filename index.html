@@ -1016,6 +1016,33 @@ function drawRings(t) {
   }
 }
 
+// Traffic contacts, drawn like a radar return: pointed along their heading and
+// tinted by whether they are above or below you.
+function drawTraffic() {
+  const PAD = 4;
+  for (const a of traffic) {
+    mapPx(a.mesh.position.x, a.mesh.position.z, px);
+    if (px[0] < -PAD || px[0] > MAP_SIZE + PAD || px[1] < -PAD || px[1] > MAP_SIZE + PAD) continue;
+
+    const above = a.mesh.position.y > plane.position.y;
+    mx.save();
+    mx.translate(px[0], px[1]);
+    // Heading as a canvas-space direction: forward is -Z, and +z runs down.
+    mx.rotate(Math.atan2(-Math.cos(a.yaw), -Math.sin(a.yaw)));
+    mx.beginPath();
+    mx.moveTo(4.2, 0);
+    mx.lineTo(-3, 2.6);
+    mx.lineTo(-3, -2.6);
+    mx.closePath();
+    mx.fillStyle = above ? 'rgba(232, 248, 255, .95)' : 'rgba(146, 186, 212, .95)';
+    mx.strokeStyle = 'rgba(8, 20, 30, .7)';
+    mx.lineWidth = 0.8;
+    mx.fill();
+    mx.stroke();
+    mx.restore();
+  }
+}
+
 // The player sits at the centre of the map, rotated to its heading. North is
 // up, so world +x runs right and world +z runs down the canvas.
 function drawPlayer() {
@@ -1086,6 +1113,7 @@ function drawMap(t) {
   mx.lineWidth = 1;
   mx.stroke();
 
+  drawTraffic();
   drawRings(t);
   drawPlayer();
 
