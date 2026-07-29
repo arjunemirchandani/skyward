@@ -100,6 +100,32 @@
   #banner.on { opacity: 1; }
   #banner b { display: block; font-size: 34px; letter-spacing: 8px; color: #eafcff; font-weight: 400; }
 
+  #landing {
+    position: absolute; left: 50%; top: 30%; transform: translate(-50%, -50%);
+    min-width: 300px; padding: 16px 22px;
+    background: rgba(6, 18, 28, .62);
+    border: 1px solid rgba(140, 230, 255, .3);
+    border-radius: 10px; backdrop-filter: blur(4px);
+    opacity: 0; transition: opacity .35s; text-align: left;
+  }
+  #landing.on { opacity: 1; }
+  #landing .hd {
+    font-size: 13px; letter-spacing: 4px; opacity: .75;
+    padding-bottom: 9px; margin-bottom: 9px;
+    border-bottom: 1px solid rgba(140, 230, 255, .18);
+  }
+  #landing .hd b { float: right; font-size: 20px; letter-spacing: 0; color: #8affc1; opacity: 1; }
+  #landing table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #landing td { padding: 2px 0; }
+  #landing td:first-child { opacity: .6; letter-spacing: 1px; }
+  #landing td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: #eafcff; }
+  #landing .score {
+    margin-top: 11px; padding-top: 9px; font-size: 12px; letter-spacing: 3px; opacity: .7;
+    border-top: 1px solid rgba(140, 230, 255, .18);
+  }
+  #landing .score b { float: right; font-size: 19px; letter-spacing: 0; color: #eafcff; opacity: 1; }
+  #landing .score span { display: block; clear: both; padding-top: 6px; font-size: 10px; opacity: .65; }
+
   #flash {
     position: fixed; inset: 0; background: #ff8a3d; opacity: 0;
     pointer-events: none; transition: opacity .35s ease-out;
@@ -164,6 +190,17 @@
   <div id="reticle"></div>
   <div id="marker"><span id="marker-dist"></span></div>
   <div id="banner"></div>
+
+  <div id="landing">
+    <div class="hd">TOUCHDOWN <b id="ldGrade">A</b></div>
+    <table>
+      <tr><td>SINK RATE</td><td id="ldSink">—</td></tr>
+      <tr><td>CENTRELINE</td><td id="ldCentre">—</td></tr>
+      <tr><td>ALIGNMENT</td><td id="ldAlign">—</td></tr>
+      <tr><td>TOUCHDOWN ZONE</td><td id="ldZone">—</td></tr>
+    </table>
+    <div class="score">SCORE <b id="ldScore">0</b><span id="ldBest"></span></div>
+  </div>
 </div>
 
 <div id="flash"></div>
@@ -801,6 +838,8 @@ const state = {
   vel: new THREE.Vector3(),
   crashed: false,
   crashT: 0,
+  onGround: false,
+  landingScore: 0,
   time: 0,
   started: false
 };
@@ -843,6 +882,7 @@ function respawn() {
   state.throttle = 0.75;
   state.crashed = false;
   state.crashT = 0;
+  state.onGround = false;
 
   if (state.started) {
     prevWarning = '';   // a fresh start should be able to re-issue advisories
@@ -1815,6 +1855,8 @@ function updateFlight(dt) {
     return;
   }
 
+  if (state.onGround) { updateGroundRoll(dt); return; }
+
   // ---- controls
   const held = (c) => keys.has(c) ? 1 : 0;
   // Authority falls off at low airspeed — control surfaces need air over them.
@@ -1881,10 +1923,18 @@ function updateFlight(dt) {
     state.speed *= 0.985;
   }
 
-  // ---- ground / water collision
+  // ---- ground contact: a runway underneath makes it a landing, not a crash
   const groundY = Math.max(terrainHeight(plane.position.x, plane.position.z), SEA_LEVEL);
   if (plane.position.y - 1.2 < groundY) {
-    crash();
+    axes();
+    const r = runwayAt(plane.position);
+    if (r) {
+      const verdict = judgeLanding(r);
+      if (verdict.survivable) touchDown(r, verdict);
+      else crash();
+    } else {
+      crash();
+    }
   }
 
   // ---- other aircraft: proximity alert, then metal on metal
@@ -1923,6 +1973,150 @@ function updateHud() {
   el.next.textContent = (ring && !courseDone)
     ? Math.round(plane.position.distanceTo(ring.mesh.position)) + 'm'
     : '—';
+}
+
+// ---------------------------------------------------------------------------
+// Landings
+// ---------------------------------------------------------------------------
+const TAKEOFF_SPEED = 95;
+
+// Which runway, if any, is directly underneath — with the position expressed in
+// runway-local units: u along the strip, v across it.
+function runwayAt(pos) {
+  for (const f of airfields) {
+    const dx = pos.x - f.x, dz = pos.z - f.z;
+    const u = dx * f.sin - dz * f.cos;
+    const v = dx * f.cos + dz * f.sin;
+    if (Math.abs(u) <= RUNWAY_LEN / 2 && Math.abs(v) <= RUNWAY_WID / 2) return { f, u, v };
+  }
+  return null;
+}
+
+const clamp01 = (t) => Math.max(0, Math.min(1, t));
+// 1 when `value` is at or under `good`, falling to 0 at `bad`.
+const taper = (value, good, bad) => clamp01(1 - (value - good) / (bad - good));
+
+function judgeLanding(r) {
+  const f = r.f;
+  const along = new THREE.Vector3(f.sin, 0, -f.cos);
+  const heading = new THREE.Vector3(fwd.x, 0, fwd.z);
+  if (heading.lengthSq() < 1e-6) heading.set(along.x, 0, along.z);
+  heading.normalize();
+
+  // Either direction is a legitimate landing; judge against the one being flown.
+  const dir = heading.dot(along) >= 0 ? 1 : -1;
+  const alignDeg = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(heading.dot(along) * dir, -1, 1)));
+
+  const sink = Math.max(0, -state.vel.y);
+  const offset = Math.abs(r.v);
+  const fromThreshold = dir > 0 ? r.u + RUNWAY_LEN / 2 : RUNWAY_LEN / 2 - r.u;
+  const bankDeg = Math.abs(THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(-right.y, -1, 1))));
+
+  // Outside these, it is an accident rather than a landing.
+  const survivable = sink <= 55 && alignDeg <= 28 && bankDeg <= 24;
+
+  // Full marks needs a genuinely soft arrival: 2 units/s is about 360 ft/min at
+  // the scale altitudes are reported in, which is a respectable touchdown.
+  const sinkScore = 40 * taper(sink, 2, 30);
+  const centreScore = 20 * taper(offset, 3, RUNWAY_WID / 2);
+  const alignScore = 20 * taper(alignDeg, 2, 25);
+  // Touchdown zone: anywhere in the first third is ideal, then it tapers.
+  const zoneScore = 20 * (fromThreshold < 110
+    ? taper(110 - fromThreshold, 0, 110)
+    : taper(fromThreshold, 340, RUNWAY_LEN));
+
+  const score = Math.round(sinkScore + centreScore + alignScore + zoneScore);
+  const grade = score >= 95 ? 'A+' : score >= 87 ? 'A' : score >= 75 ? 'B'
+              : score >= 60 ? 'C' : score >= 45 ? 'D' : 'E';
+
+  return { survivable, score, grade, sink, offset, alignDeg, fromThreshold, dir, bankDeg,
+           rwy: dir > 0 ? f.rwy : f.rwyReciprocal };
+}
+
+const ldEl = {
+  panel: document.getElementById('landing'),
+  grade: document.getElementById('ldGrade'),
+  sink: document.getElementById('ldSink'),
+  centre: document.getElementById('ldCentre'),
+  align: document.getElementById('ldAlign'),
+  zone: document.getElementById('ldZone'),
+  score: document.getElementById('ldScore'),
+  best: document.getElementById('ldBest')
+};
+
+const LAND_KEY = 'skyward.bestLanding';
+let bestLanding = parseInt(localStorage.getItem(LAND_KEY) || '', 10);
+if (!Number.isFinite(bestLanding)) bestLanding = null;
+
+let landingPanelTimer = 0;
+
+function showLanding(v) {
+  ldEl.grade.textContent = v.grade;
+  ldEl.sink.textContent = `${Math.round(v.sink * FEET * 60).toLocaleString('en-US')} ft/min`;
+  ldEl.centre.textContent = `${v.offset.toFixed(1)} m`;
+  ldEl.align.textContent = `${v.alignDeg.toFixed(1)}°`;
+  ldEl.zone.textContent = `${Math.round(v.fromThreshold)} m`;
+  ldEl.score.textContent = v.score;
+
+  const record = bestLanding === null || v.score > bestLanding;
+  if (record) {
+    bestLanding = v.score;
+    localStorage.setItem(LAND_KEY, String(v.score));
+  }
+  ldEl.best.textContent = record ? 'NEW BEST LANDING' : `BEST ${bestLanding}`;
+
+  ldEl.panel.classList.add('on');
+  landingPanelTimer = 7;
+}
+
+function touchDown(r, v) {
+  state.onGround = true;
+  state.landingScore = v.score;
+
+  // Settle onto the surface rather than through it.
+  plane.position.y = r.f.elev + 1.2;
+  state.vel.y = 0;
+
+  showLanding(v);
+  chime(Math.max(1, Math.round(v.score / 12)));
+
+  const remark = v.score >= 87 ? 'Nicely flown.'
+               : v.score >= 60 ? 'Welcome in.'
+               : 'Firm one.';
+  atcToPlayer(`${PLAYER_CS}, ${r.f.name}, roger, down runway ${v.rwy}. ${remark}`);
+}
+
+// Rolling on the strip: hold the wheels on the surface, bleed off speed, and
+// let the player fly again once there is enough airspeed.
+function updateGroundRoll(dt) {
+  const r = runwayAt(plane.position);
+  if (!r) { crash(); return; }          // ran off the side or the end
+
+  // Level the attitude out as the aircraft settles.
+  const k = 1 - Math.exp(-4 * dt);
+  const e = new THREE.Euler().setFromQuaternion(plane.quaternion, 'YXZ');
+  e.x += (0 - e.x) * k;
+  e.z += (0 - e.z) * k;
+  plane.quaternion.setFromEuler(e);
+
+  if (keys.has('ArrowUp'))   state.throttle = Math.min(1, state.throttle + 0.55 * dt);
+  if (keys.has('ArrowDown')) state.throttle = Math.max(0, state.throttle - 0.55 * dt);
+
+  const target = state.throttle * MAX_SPEED;
+  const drag = state.throttle < 0.15 ? 26 : 8;      // wheels and idle drag
+  state.speed += (target - state.speed) * 0.35 * dt - drag * dt;
+  state.speed = Math.max(0, state.speed);
+
+  axes();
+  plane.position.addScaledVector(fwd, state.speed * dt);
+  plane.position.y = r.f.elev + 1.2;
+  state.vel.set(fwd.x * state.speed, 0, fwd.z * state.speed);
+
+  if (state.speed > TAKEOFF_SPEED && state.throttle > 0.5) {
+    state.onGround = false;            // flying again
+  }
+
+  plane.userData.prop.rotation.z += (6 + state.throttle * 46) * dt;
 }
 
 // ---------------------------------------------------------------------------
@@ -2176,7 +2370,8 @@ window.SKYWARD = {
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition,
-  airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID,
+  airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
+  updateFlight,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -2196,6 +2391,7 @@ function tick() {
     updateRings(dt, t);
     updateChatter(dt);
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
+    if (landingPanelTimer > 0 && (landingPanelTimer -= dt) <= 0) ldEl.panel.classList.remove('on');
   } else {
     // Idle fly-by while the title card is up.
     axes();
