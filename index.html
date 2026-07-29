@@ -128,6 +128,21 @@
   #banner.on { opacity: 1; }
   #banner b { display: block; font-size: 34px; letter-spacing: 8px; color: #eafcff; font-weight: 400; }
 
+  #confirm {
+    position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    padding: 14px 22px; text-align: center;
+    background: rgba(28, 14, 6, .72);
+    border: 1px solid rgba(255, 179, 90, .5);
+    border-radius: 9px; backdrop-filter: blur(3px);
+    font-size: 11px; letter-spacing: 2px; color: #ffcf8a;
+    opacity: 0; transition: opacity .18s;
+  }
+  #confirm.on { opacity: 1; }
+  #confirm b {
+    display: block; font-size: 19px; letter-spacing: 5px;
+    color: #ffb35a; font-weight: 400; margin-bottom: 8px;
+  }
+
   #missionResult,
   #landing {
     position: absolute; left: 50%; top: 30%; transform: translate(-50%, -50%);
@@ -234,6 +249,7 @@
   <div id="reticle"></div>
   <div id="marker"><span id="marker-dist"></span></div>
   <div id="banner"></div>
+  <div id="confirm"></div>
 
   <div id="missionResult">
     <div class="hd">MISSION <b id="mrGrade">A</b></div>
@@ -1346,6 +1362,42 @@ function boom() {
 }
 
 // ---------------------------------------------------------------------------
+// Confirmation for actions that would throw away a flight in progress
+// ---------------------------------------------------------------------------
+const confirmEl = document.getElementById('confirm');
+let pendingConfirm = null;
+
+// Only guard when there is something to lose. On the runway, or once a mission
+// is finished, restarting costs nothing and should not need a keypress twice.
+function progressAtStake() {
+  if (mission.active && (mission.phase === 'enroute' || mission.phase === 'arrival')) {
+    return `ABANDON FLIGHT TO ${mission.dest.name}?`;
+  }
+  if (!mission.active && nextRing > 0 && !courseDone) {
+    return `ABANDON COURSE? ${nextRing} OF ${RING_COUNT} GATES FLOWN`;
+  }
+  return null;
+}
+
+function requestConfirm(code, keyLabel, message, action) {
+  pendingConfirm = { code, action, t: 5 };
+  confirmEl.innerHTML = `<b>${message}</b>PRESS ${keyLabel} AGAIN TO CONFIRM &middot; ANY OTHER KEY CANCELS`;
+  confirmEl.classList.add('on');
+}
+
+function clearConfirm() {
+  pendingConfirm = null;
+  confirmEl.classList.remove('on');
+}
+
+// Run `action`, but ask first if a flight is underway.
+function guarded(code, keyLabel, action) {
+  const risk = progressAtStake();
+  if (risk) requestConfirm(code, keyLabel, risk, action);
+  else action();
+}
+
+// ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
 const keys = new Set();
@@ -1356,12 +1408,21 @@ const TRACKED = new Set([
 
 addEventListener('keydown', (e) => {
   if (!state.started) { startGame(); return; }
+
+  // A prompt is up: the same key again confirms, anything else cancels and
+  // then does its usual job, so cancelling never costs you a control input.
+  if (pendingConfirm) {
+    const p = pendingConfirm;
+    clearConfirm();
+    if (e.code === p.code) { e.preventDefault(); p.action(); return; }
+  }
+
   if (TRACKED.has(e.code)) { keys.add(e.code); e.preventDefault(); }
   if (e.code === 'KeyR') respawn();
   if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
   if (e.code === 'KeyM') { muted = !muted; setBanner(muted ? 'SOUND OFF' : 'SOUND ON', 0.9); }
-  if (e.code === 'KeyN') { endMission(); newCourse(); }
-  if (e.code === 'KeyB') startMission();
+  if (e.code === 'KeyN') guarded('KeyN', 'N', () => { endMission(); newCourse(); });
+  if (e.code === 'KeyB') guarded('KeyB', 'B', startMission);
   if (e.code === 'KeyZ') cycleMapZoom();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -3110,6 +3171,7 @@ window.SKYWARD = {
   get turbLevel() { return turbLevel; },
   preferredEnd, windsocks, updateWindsocks,
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
+  progressAtStake, get pendingConfirm() { return pendingConfirm; },
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -3134,6 +3196,7 @@ function tick() {
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
     if (landingPanelTimer > 0 && (landingPanelTimer -= dt) <= 0) ldEl.panel.classList.remove('on');
     if (missionPanelTimer > 0 && (missionPanelTimer -= dt) <= 0) mrEl.panel.classList.remove('on');
+    if (pendingConfirm && (pendingConfirm.t -= dt) <= 0) clearConfirm();
   } else {
     // Idle fly-by while the title card is up.
     axes();
