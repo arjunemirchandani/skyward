@@ -52,6 +52,27 @@
   #reticle:before { left: 0; right: 0; top: 50%; height: 1px; }
   #reticle:after  { top: 0; bottom: 0; left: 50%; width: 1px; }
 
+  #marker {
+    position: absolute; left: 0; top: 0; width: 54px; height: 54px;
+    opacity: 0; transition: opacity .2s;
+    border: 1px solid #ffd257; border-radius: 50%;
+    box-shadow: 0 0 12px rgba(255,210,87,.5), inset 0 0 10px rgba(255,210,87,.25);
+  }
+  #marker.on { opacity: .9; }
+  #marker.edge { border-radius: 4px; border-style: dashed; }
+  #marker-dist {
+    position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+    margin-top: 5px; font-size: 11px; color: #ffd257; white-space: nowrap;
+  }
+
+  #banner {
+    position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%);
+    text-align: center; font-size: 17px; letter-spacing: 4px; line-height: 2;
+    color: #8affc1; opacity: 0; transition: opacity .3s;
+  }
+  #banner.on { opacity: 1; }
+  #banner b { display: block; font-size: 34px; letter-spacing: 8px; color: #eafcff; font-weight: 400; }
+
   #flash {
     position: fixed; inset: 0; background: #ff8a3d; opacity: 0;
     pointer-events: none; transition: opacity .35s ease-out;
@@ -85,7 +106,8 @@
     A / D &nbsp; roll<br>
     Q / E &nbsp; rudder<br>
     &uarr; / &darr; &nbsp; throttle<br>
-    C &nbsp; camera &nbsp;&middot;&nbsp; R &nbsp; respawn
+    C camera &nbsp;&middot;&nbsp; R respawn<br>
+    N new course &nbsp;&middot;&nbsp; M mute
   </div>
 
   <div class="panel" id="left">
@@ -97,11 +119,16 @@
   </div>
 
   <div class="panel" id="right">
+    <div class="row"><span class="k">RINGS</span><span class="v big" id="rings">0/12</span></div>
+    <div class="row"><span class="k">NEXT</span><span class="v" id="next">—</span></div>
     <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
+    <div class="row"><span class="k">BEST</span><span class="v" id="best">—</span></div>
   </div>
 
   <div id="warn"></div>
   <div id="reticle"></div>
+  <div id="marker"><span id="marker-dist"></span></div>
+  <div id="banner"></div>
 </div>
 
 <div id="flash"></div>
@@ -117,7 +144,9 @@
       <tr><td>&uarr; / &darr;</td><td>throttle</td></tr>
       <tr><td>C</td><td>chase / cockpit view</td></tr>
       <tr><td>R</td><td>respawn</td></tr>
+      <tr><td>N / M</td><td>new course / mute</td></tr>
     </table>
+    <div class="sub" style="letter-spacing:2px;margin-bottom:18px">FLY THROUGH ALL 12 GOLD RINGS &mdash; BEAT YOUR TIME</div>
     <div class="go">PRESS ANY KEY TO FLY</div>
   </div>
 </div>
@@ -418,6 +447,107 @@ const plane = buildPlane();
 scene.add(plane);
 
 // ---------------------------------------------------------------------------
+// Ring course
+// ---------------------------------------------------------------------------
+const RING_COUNT = 12;
+const RING_R = 62;
+const ringGeo = new THREE.TorusGeometry(RING_R, 3.4, 10, 44);
+const rings = [];
+const fading = [];
+let nextRing = 0;
+let courseDone = false;
+
+const ACTIVE = new THREE.Color(0xffd257);
+const IDLE = new THREE.Color(0x2fd4ff);
+
+function ringMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0x0e2f3d, emissive: IDLE.clone(), emissiveIntensity: 0.45,
+    roughness: 0.35, metalness: 0.3, transparent: true, opacity: 1
+  });
+}
+
+function buildCourse() {
+  for (const r of rings) { scene.remove(r.mesh); r.mesh.material.dispose(); }
+  rings.length = 0;
+  nextRing = 0;
+  courseDone = false;
+
+  const p = plane.position.clone();
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(plane.quaternion).setY(0).normalize();
+
+  for (let i = 0; i < RING_COUNT; i++) {
+    // Wander forward, but curve back toward the middle if we near the edge.
+    if (Math.hypot(p.x, p.z) > WORLD * 0.33) {
+      const home = new THREE.Vector3(-p.x, 0, -p.z).normalize();
+      dir.lerp(home, 0.55).normalize();
+    } else {
+      dir.applyAxisAngle(WORLD_UP, (Math.random() - 0.5) * 1.15).normalize();
+    }
+    p.addScaledVector(dir, 950 + Math.random() * 750);
+
+    const ground = Math.max(terrainHeight(p.x, p.z), SEA_LEVEL);
+    p.y = ground + 220 + Math.random() * 430;
+
+    const mesh = new THREE.Mesh(ringGeo, ringMaterial());
+    mesh.position.copy(p);
+    mesh.lookAt(p.clone().addScaledVector(dir, 100));
+    mesh.rotateY((Math.random() - 0.5) * 0.5);
+    mesh.rotateX((Math.random() - 0.5) * 0.35);
+    scene.add(mesh);
+    rings.push({ mesh, spin: (Math.random() - 0.5) * 0.5 });
+  }
+}
+
+const prevPos = new THREE.Vector3();
+const lp = new THREE.Vector3();
+const lc = new THREE.Vector3();
+
+function checkRing() {
+  if (courseDone || nextRing >= rings.length) return;
+  const ring = rings[nextRing];
+  ring.mesh.updateMatrixWorld();
+  ring.mesh.worldToLocal(lp.copy(prevPos));
+  ring.mesh.worldToLocal(lc.copy(plane.position));
+  if ((lp.z > 0) === (lc.z > 0)) return;
+
+  // Where did the flight path pierce the ring's plane?
+  const t = lp.z / (lp.z - lc.z);
+  const x = lp.x + (lc.x - lp.x) * t;
+  const y = lp.y + (lc.y - lp.y) * t;
+  if (Math.hypot(x, y) > RING_R) return;
+
+  fading.push({ mesh: ring.mesh, t: 0 });
+  ring.mesh.material.emissive.setHex(0x8affc1);
+  ring.mesh.material.emissiveIntensity = 2.2;
+  nextRing++;
+  chime(nextRing);
+
+  if (nextRing >= rings.length) {
+    courseDone = true;
+    finishCourse();
+  }
+}
+
+function updateRings(dt, t) {
+  for (const f of fading) {
+    f.t += dt;
+    const k = Math.min(1, f.t / 0.55);
+    f.mesh.scale.setScalar(1 + k * 0.7);
+    f.mesh.material.opacity = 1 - k;
+    if (k >= 1) f.mesh.visible = false;
+  }
+  for (let i = fading.length - 1; i >= 0; i--) if (fading[i].t >= 0.55) fading.splice(i, 1);
+
+  const ring = rings[nextRing];
+  if (ring && !courseDone) {
+    ring.mesh.material.emissive.copy(ACTIVE);
+    ring.mesh.material.emissiveIntensity = 1.1 + Math.sin(t * 5) * 0.5;
+    ring.mesh.rotation.z += ring.spin * dt;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Flight state
 // ---------------------------------------------------------------------------
 const state = {
@@ -432,17 +562,38 @@ const state = {
 
 const START = new THREE.Vector3(0, 900, 2200);
 
+// Yaw that puts the nose (local -Z) on a heading toward `to`.
+// Object3D.lookAt aims +Z, which would fly the plane backwards.
+function headingTo(from, to) {
+  return Math.atan2(-(to.x - from.x), -(to.z - from.z));
+}
+
 function respawn() {
-  // Drop the player somewhere with land underneath, facing the middle of the map.
-  let p = START.clone();
-  for (let i = 0; i < 60; i++) {
-    const a = Math.random() * Math.PI * 2, r = Math.random() * WORLD * 0.3;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (terrainHeight(x, z) > 60) { p.set(x, terrainHeight(x, z) + 700, z); break; }
+  const p = START.clone();
+  const aim = new THREE.Vector3(0, 0, 0);
+
+  const target = rings[nextRing];
+  if (target && !courseDone) {
+    // Mid-course: put the player back on approach instead of across the map.
+    const to = target.mesh.position;
+    const back = new THREE.Vector3(plane.position.x - to.x, 0, plane.position.z - to.z);
+    if (back.lengthSq() < 1) back.set(0, 0, 1);
+    back.normalize();
+    p.copy(to).addScaledVector(back, 1400);
+    p.y = Math.max(terrainHeight(p.x, p.z), SEA_LEVEL) + 500;
+    aim.copy(to);
+  } else {
+    // Fresh start: somewhere over land, pointed at the middle of the map.
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * WORLD * 0.3;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (terrainHeight(x, z) > 60) { p.set(x, terrainHeight(x, z) + 700, z); break; }
+    }
   }
+
   plane.position.copy(p);
   plane.quaternion.identity();
-  plane.rotateY(Math.atan2(-p.x, -p.z) + Math.PI);
+  plane.rotateY(headingTo(p, aim));
   state.speed = 190;
   state.throttle = 0.75;
   state.crashed = false;
@@ -451,28 +602,123 @@ function respawn() {
 respawn();
 
 // ---------------------------------------------------------------------------
+// Audio — everything is synthesised, no asset files
+// ---------------------------------------------------------------------------
+let audio = null, master = null, engineGain = null, engineFilter = null, noiseBuf = null;
+const engineOscs = [];
+let muted = false;
+
+function initAudio() {
+  if (audio) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  audio = new AC();
+
+  master = audio.createGain();
+  master.gain.value = 0.55;
+  master.connect(audio.destination);
+
+  engineFilter = audio.createBiquadFilter();
+  engineFilter.type = 'lowpass';
+  engineFilter.frequency.value = 800;
+  engineFilter.Q.value = 3;
+  engineFilter.connect(master);
+
+  engineGain = audio.createGain();
+  engineGain.gain.value = 0;
+  engineGain.connect(engineFilter);
+
+  for (const [type, detune] of [['sawtooth', 0], ['square', 9], ['sawtooth', -11]]) {
+    const o = audio.createOscillator();
+    o.type = type;
+    o.detune.value = detune;
+    o.frequency.value = 70;
+    o.connect(engineGain);
+    o.start();
+    engineOscs.push(o);
+  }
+
+  const len = audio.sampleRate * 1.2;
+  noiseBuf = audio.createBuffer(1, len, audio.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+}
+
+function updateEngine() {
+  if (!audio) return;
+  const now = audio.currentTime;
+  const f = 46 + state.throttle * 44 + state.speed * 0.13;
+  for (const o of engineOscs) o.frequency.setTargetAtTime(f, now, 0.09);
+  const vol = muted || !state.started ? 0 : (state.crashed ? 0.01 : 0.05 + state.throttle * 0.09);
+  engineGain.gain.setTargetAtTime(vol, now, 0.12);
+  engineFilter.frequency.setTargetAtTime(420 + state.speed * 3.4, now, 0.15);
+}
+
+function tone(freq, dur, vol, type = 'sine', delay = 0) {
+  if (!audio || muted) return;
+  const t0 = audio.currentTime + delay;
+  const o = audio.createOscillator();
+  const g = audio.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(vol, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+
+function chime(n) {
+  const base = 520 * Math.pow(1.0595, Math.min(n, 12) * 2);
+  tone(base, 0.18, 0.22, 'triangle');
+  tone(base * 1.5, 0.3, 0.16, 'sine', 0.07);
+}
+
+function boom() {
+  if (!audio || muted || !noiseBuf) return;
+  const t0 = audio.currentTime;
+  const src = audio.createBufferSource();
+  src.buffer = noiseBuf;
+  const g = audio.createGain();
+  const f = audio.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.setValueAtTime(1400, t0);
+  f.frequency.exponentialRampToValueAtTime(90, t0 + 0.9);
+  g.gain.setValueAtTime(0.5, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.0);
+  src.connect(f); f.connect(g); g.connect(master);
+  src.start(t0); src.stop(t0 + 1.1);
+}
+
+// ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
 const keys = new Set();
 const TRACKED = new Set([
-  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC',
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN',
   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
 ]);
 
 addEventListener('keydown', (e) => {
-  if (!state.started) startGame();
+  if (!state.started) { startGame(); return; }
   if (TRACKED.has(e.code)) { keys.add(e.code); e.preventDefault(); }
   if (e.code === 'KeyR') respawn();
   if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
+  if (e.code === 'KeyM') { muted = !muted; setBanner(muted ? 'SOUND OFF' : 'SOUND ON', 0.9); }
+  if (e.code === 'KeyN') newCourse();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 
 const startEl = document.getElementById('start');
 function startGame() {
+  if (state.started) return;
   state.started = true;
   state.time = 0;
   startEl.classList.add('hidden');
+  initAudio();
+  if (audio && audio.state === 'suspended') audio.resume();
+  buildCourse();
 }
 startEl.addEventListener('click', startGame);
 
@@ -516,13 +762,85 @@ const el = {
   thr: document.getElementById('thr'),
   thrbar: document.getElementById('thrbar'),
   time: document.getElementById('time'),
+  rings: document.getElementById('rings'),
+  next: document.getElementById('next'),
+  best: document.getElementById('best'),
   warn: document.getElementById('warn'),
+  banner: document.getElementById('banner'),
+  marker: document.getElementById('marker'),
+  markerDist: document.getElementById('marker-dist'),
   flash: document.getElementById('flash')
 };
 
 function setWarn(text) {
   if (text) { el.warn.textContent = text; el.warn.classList.add('on'); }
   else el.warn.classList.remove('on');
+}
+
+let bannerTimer = 0;
+function setBanner(html, seconds) {
+  el.banner.innerHTML = html;
+  el.banner.classList.add('on');
+  bannerTimer = seconds;
+}
+
+// ---- best time, persisted between sessions
+const BEST_KEY = 'skyward.best';
+let best = parseFloat(localStorage.getItem(BEST_KEY) || '') || null;
+el.best.textContent = best ? best.toFixed(1) : '—';
+
+function finishCourse() {
+  const t = state.time;
+  const record = best === null || t < best;
+  if (record) {
+    best = t;
+    localStorage.setItem(BEST_KEY, String(t));
+    el.best.textContent = t.toFixed(1);
+  }
+  setBanner(`<b>COURSE COMPLETE</b>${t.toFixed(1)}s${record ? ' &mdash; NEW BEST' : ''}<br><span style="font-size:12px;opacity:.7">NEW COURSE IN 4&hellip;</span>`, 4);
+  tone(660, 0.25, 0.22, 'triangle');
+  tone(880, 0.25, 0.22, 'triangle', 0.16);
+  tone(1320, 0.55, 0.20, 'triangle', 0.32);
+  setTimeout(() => { if (courseDone) newCourse(); }, 4000);
+}
+
+function newCourse() {
+  buildCourse();
+  state.time = 0;
+  setBanner('<b>NEW COURSE</b>FLY THROUGH THE GOLD RING', 2.2);
+}
+
+// ---- on-screen marker pointing at the next ring
+const ndc = new THREE.Vector3();
+function updateMarker() {
+  const ring = rings[nextRing];
+  if (!ring || courseDone || !state.started) { el.marker.classList.remove('on'); return; }
+
+  const dist = plane.position.distanceTo(ring.mesh.position);
+  el.markerDist.textContent = Math.round(dist) + 'm';
+
+  ndc.copy(ring.mesh.position).project(camera);
+  const behind = ndc.z > 1;
+  let x = ndc.x, y = ndc.y;
+  if (behind) { x = -x; y = -y; }
+
+  const onScreen = !behind && Math.abs(x) < 0.94 && Math.abs(y) < 0.94;
+  if (!onScreen) {
+    // Pin the marker to the screen edge in the ring's direction.
+    const len = Math.max(Math.abs(x), Math.abs(y)) || 1;
+    x = (x / len) * 0.9;
+    y = (y / len) * 0.9;
+  }
+
+  // Close enough to see the ring itself? Get out of the way.
+  if (onScreen && dist < 420) { el.marker.classList.remove('on'); return; }
+
+  const size = onScreen ? THREE.MathUtils.clamp(26000 / dist, 24, 64) : 30;
+  el.marker.classList.toggle('edge', !onScreen);
+  el.marker.classList.add('on');
+  el.marker.style.width = el.marker.style.height = size + 'px';
+  el.marker.style.left = ((x * 0.5 + 0.5) * innerWidth - size / 2) + 'px';
+  el.marker.style.top = ((-y * 0.5 + 0.5) * innerHeight - size / 2) + 'px';
 }
 
 function flash() {
@@ -610,8 +928,10 @@ function updateFlight(dt) {
   }
 
   // ---- integrate
+  prevPos.copy(plane.position);
   state.vel.copy(fwd).multiplyScalar(state.speed).addScaledVector(WORLD_UP, -sink);
   plane.position.addScaledVector(state.vel, dt);
+  checkRing();
 
   // ---- soft boundary: turn the player back toward the middle of the map
   const edge = WORLD * 0.52;
@@ -645,6 +965,7 @@ function crash() {
   state.speed *= 0.25;
   setWarn('CRASHED');
   flash();
+  boom();
 }
 
 function updateHud() {
@@ -656,6 +977,11 @@ function updateHud() {
   el.thr.textContent = Math.round(state.throttle * 100) + '%';
   el.thrbar.style.width = (state.throttle * 100) + '%';
   el.time.textContent = state.time.toFixed(1);
+  el.rings.textContent = `${nextRing}/${RING_COUNT}`;
+  const ring = rings[nextRing];
+  el.next.textContent = (ring && !courseDone)
+    ? Math.round(plane.position.distanceTo(ring.mesh.position)) + 'm'
+    : '—';
 }
 
 // ---------------------------------------------------------------------------
@@ -664,15 +990,24 @@ function updateHud() {
 const clock = new THREE.Clock();
 
 // Dev handle — poke at the sim from the console.
-window.SKYWARD = { state, plane, keys, camera, scene, THREE, terrainHeight, respawn };
+window.SKYWARD = {
+  state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
+  rings, buildCourse, newCourse,
+  get nextRing() { return nextRing; },
+  get courseDone() { return courseDone; }
+};
 
 function tick() {
   requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.05);
 
+  const t = clock.elapsedTime;
+
   if (state.started) {
-    state.time += dt;
+    if (!courseDone) state.time += dt;
     updateFlight(dt);
+    updateRings(dt, t);
+    if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
   } else {
     // Idle fly-by while the title card is up.
     axes();
@@ -686,6 +1021,8 @@ function tick() {
   ocean.position.x = camera.position.x;
   ocean.position.z = camera.position.z;
   updateHud();
+  updateMarker();
+  updateEngine();
 
   renderer.render(scene, camera);
 }
