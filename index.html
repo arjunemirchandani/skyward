@@ -938,6 +938,43 @@ const bakedMap = (() => {
 // World position -> pixel in the baked map.
 function bakePx(v) { return (v + WORLD / 2) / WORLD * MAP_BAKE; }
 
+// The player sits at the centre of the map, rotated to its heading. North is
+// up, so world +x runs right and world +z runs down the canvas.
+function drawPlayer() {
+  const c = MAP_SIZE / 2;
+  mx.save();
+  mx.translate(c, c);
+  mx.rotate(Math.atan2(fwd.z, fwd.x));
+
+  // Field-of-view wedge, so you can tell what you are looking at.
+  const reach = 26;
+  const spread = THREE.MathUtils.degToRad(camera.fov * 0.5) * camera.aspect;
+  const grad = mx.createRadialGradient(0, 0, 0, 0, 0, reach);
+  grad.addColorStop(0, 'rgba(205, 246, 255, .30)');
+  grad.addColorStop(1, 'rgba(205, 246, 255, 0)');
+  mx.fillStyle = grad;
+  mx.beginPath();
+  mx.moveTo(0, 0);
+  mx.arc(0, 0, reach, -spread, spread);
+  mx.closePath();
+  mx.fill();
+
+  // Aircraft chevron.
+  mx.beginPath();
+  mx.moveTo(7, 0);
+  mx.lineTo(-5, 4.5);
+  mx.lineTo(-2.5, 0);
+  mx.lineTo(-5, -4.5);
+  mx.closePath();
+  mx.fillStyle = '#ffffff';
+  mx.strokeStyle = 'rgba(10, 20, 30, .85)';
+  mx.lineWidth = 1;
+  mx.fill();
+  mx.stroke();
+
+  mx.restore();
+}
+
 function drawMap() {
   mx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
 
@@ -963,6 +1000,8 @@ function drawMap() {
       cx0 * scale, cy0 * scale, (cx1 - cx0) * scale, (cy1 - cy0) * scale
     );
   }
+
+  drawPlayer();
 
   // Frame and north marker.
   mx.strokeStyle = 'rgba(140, 230, 255, .35)';
