@@ -24,6 +24,7 @@ Then open http://localhost:8123.
 | `R` | Respawn |
 | `N` | New course |
 | `M` | Mute |
+| `Z` | Minimap zoom (2.5 / 5 / 10 km) |
 
 ## The game
 
@@ -36,11 +37,14 @@ Crashing into terrain or water puts you back on approach to the ring you were he
 - **Terrain** — value-noise fBm heightfield (`terrainHeight`), 300×300 grid over 14 km. A continent layer decides land vs. ocean, a ridged layer adds mountains only where there is already land, and vertex colours come from height and slope. The same function is sampled directly for collision, so the physics and the mesh can never disagree.
 - **Flight model** — arcade, not aerodynamic. Speed chases a throttle-driven target and trades against climb angle (`speed -= forward.y * GRAVITY * dt`), control authority falls off with airspeed, banking couples into yaw for coordinated turns, and below stall speed the nose drops and the plane sinks. Wings self-level when the stick is centred and the plane is upright.
 - **Ring detection** — each frame the previous and current positions are transformed into ring-local space; a sign change in local `z` plus a radial hit inside the torus radius counts as a pass. Frame-rate independent, no tunnelling.
+- **Minimap** — the whole world is baked once into a 320×320 offscreen canvas: land colours from the same palette as the 3D terrain, depth-shaded ocean, and a hillshade computed from central differences on the height grid (no extra noise sampling). Each frame the map blits a player-centred, north-up window out of that bake and overlays the ring course. `drawImage` clips a source rectangle that runs off the bake, so the destination rectangle is clipped to match — otherwise the map would smear near the world edge.
 - **Audio** — WebAudio only. Three detuned oscillators through a lowpass make the engine, its pitch and cutoff following throttle and speed; ring chimes climb a semitone ladder; the crash is a filtered noise burst.
 
 ## Development
 
-`window.SKYWARD` exposes the sim state (`state`, `plane`, `rings`, `nextRing`, `terrainHeight`, `respawn`, `newCourse`) for poking at things from the console.
+`window.SKYWARD` exposes the sim state (`state`, `plane`, `rings`, `nextRing`, `terrainHeight`, `respawn`, `newCourse`, `mapSpan`, `cycleMapZoom`) for poking at things from the console.
+
+When driving the game from the console, wait on `requestAnimationFrame` rather than `setTimeout` before reading HUD text — the render loop is what writes it, and a backgrounded tab throttles frames, which makes the HUD look one step behind.
 
 Two three.js gotchas this code deliberately works around:
 
