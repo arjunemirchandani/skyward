@@ -1009,6 +1009,109 @@ function updateRings(dt, t) {
 }
 
 // ---------------------------------------------------------------------------
+// Missions — a flight from one field to another, by way of the gates
+// ---------------------------------------------------------------------------
+const ROUTE_GATES = 8;
+
+const mission = {
+  active: false,
+  phase: 'idle',        // ready | enroute | arrival | complete
+  origin: null,
+  dest: null,
+  t: 0,                 // airborne time
+  gatesTotal: 0,
+  landing: null,
+  score: 0
+};
+
+// Gates laid along the route between two fields, swinging either side of the
+// direct track. Flying the gates is what takes you to the destination — which
+// is the whole point of the merge.
+function buildRouteCourse(from, to) {
+  for (const r of rings) { scene.remove(r.mesh); r.mesh.material.dispose(); }
+  rings.length = 0;
+  nextRing = 0;
+  courseDone = false;
+
+  const dx = to.x - from.x, dz = to.z - from.z;
+  const total = Math.hypot(dx, dz) || 1;
+  const px = -dz / total, pz = dx / total;      // perpendicular to the track
+  const spread = Math.min(950, total * 0.17);
+
+  // Positions first, so each gate can be turned to face the flow through it.
+  const pts = [new THREE.Vector3(from.x, from.elev + 200, from.z)];
+  for (let i = 1; i <= ROUTE_GATES; i++) {
+    const t = i / (ROUTE_GATES + 1);
+    const swing = Math.sin(i * 1.9) * (0.4 + Math.random() * 0.55);
+    const lateral = swing * spread;
+    const x = from.x + dx * t + px * lateral;
+    const z = from.z + dz * t + pz * lateral;
+    const ground = Math.max(terrainHeight(x, z), SEA_LEVEL);
+    pts.push(new THREE.Vector3(x, ground + 240 + Math.random() * 300, z));
+  }
+  pts.push(new THREE.Vector3(to.x, to.elev + 200, to.z));
+
+  const dir = new THREE.Vector3();
+  for (let i = 1; i <= ROUTE_GATES; i++) {
+    const p = pts[i];
+    dir.subVectors(pts[i + 1], pts[i - 1]).normalize();   // flow through the gate
+
+    const mesh = new THREE.Mesh(ringGeo, ringMaterial());
+    mesh.position.copy(p);
+    mesh.lookAt(p.clone().addScaledVector(dir, 100));
+    scene.add(mesh);
+    rings.push({ mesh, spin: (Math.random() - 0.5) * 0.5 });
+  }
+  return rings.length;
+}
+
+// Line up at the start of a runway, stopped, ready to go.
+function placeOnRunway(f, end) {
+  const dir = end === f.rwy ? 1 : -1;
+  const ax = f.sin * dir, az = -f.cos * dir;
+  const u = -dir * (RUNWAY_LEN / 2 - 70);
+
+  plane.position.set(f.x + f.sin * u, f.elev + 1.2, f.z - f.cos * u);
+  plane.quaternion.identity();
+  plane.rotateY(Math.atan2(-ax, -az));
+
+  state.speed = 0;
+  state.throttle = 0;
+  state.onGround = true;
+  state.stopped = true;
+  state.crashed = false;
+  state.vel.set(0, 0, 0);
+}
+
+function startMission() {
+  const near = nearestAirfield(plane.position.x, plane.position.z);
+  const origin = near ? near.field : airfields[0];
+  const others = airfields.filter(f => f !== origin);
+  const dest = others[Math.floor(Math.random() * others.length)] || origin;
+
+  mission.active = true;
+  mission.phase = 'ready';
+  mission.origin = origin;
+  mission.dest = dest;
+  mission.t = 0;
+  mission.landing = null;
+  mission.score = 0;
+  mission.gatesTotal = buildRouteCourse(origin, dest);
+
+  const end = preferredEnd(origin);
+  placeOnRunway(origin, end);
+  state.time = 0;
+
+  atcToPlayer(`${PLAYER_CS}, cleared to ${dest.name} via ${mission.gatesTotal} gates. Runway ${end}, cleared for takeoff.`);
+  setBanner(`<b>${dest.name}</b>${mission.gatesTotal} GATES &middot; RUNWAY ${end}`, 4);
+}
+
+function endMission() {
+  mission.active = false;
+  mission.phase = 'idle';
+}
+
+// ---------------------------------------------------------------------------
 // Flight state
 // ---------------------------------------------------------------------------
 const state = {
@@ -1191,7 +1294,7 @@ function boom() {
 // ---------------------------------------------------------------------------
 const keys = new Set();
 const TRACKED = new Set([
-  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ',
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB',
   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
 ]);
 
@@ -1201,7 +1304,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') respawn();
   if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
   if (e.code === 'KeyM') { muted = !muted; setBanner(muted ? 'SOUND OFF' : 'SOUND ON', 0.9); }
-  if (e.code === 'KeyN') newCourse();
+  if (e.code === 'KeyN') { endMission(); newCourse(); }
+  if (e.code === 'KeyB') startMission();
   if (e.code === 'KeyZ') cycleMapZoom();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -1297,6 +1401,17 @@ let best = parseFloat(localStorage.getItem(BEST_KEY) || '') || null;
 el.best.textContent = best ? best.toFixed(1) : '—';
 
 function finishCourse() {
+  // On a mission the gates are only the middle of the flight — you still have
+  // to get down at the destination.
+  if (mission.active) {
+    mission.phase = 'arrival';
+    setBanner(`<b>GATES COMPLETE</b>PROCEED TO ${mission.dest.name}`, 3.5);
+    atcToPlayer(`${PLAYER_CS}, all gates complete. Proceed to ${mission.dest.name}, report the field in sight.`);
+    tone(660, 0.22, 0.2, 'triangle');
+    tone(990, 0.3, 0.18, 'triangle', 0.15);
+    return;
+  }
+
   const t = state.time;
   const record = best === null || t < best;
   if (record) {
@@ -2836,6 +2951,7 @@ window.SKYWARD = {
   updateFlight, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
   preferredEnd, windsocks, updateWindsocks,
+  mission, startMission, endMission, buildRouteCourse, placeOnRunway,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
