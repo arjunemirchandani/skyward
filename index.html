@@ -52,6 +52,26 @@
   #reticle:before { left: 0; right: 0; top: 50%; height: 1px; }
   #reticle:after  { top: 0; bottom: 0; left: 50%; width: 1px; }
 
+  #radio {
+    position: absolute; left: 18px; top: 200px; width: 340px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  #radio .msg {
+    background: rgba(6, 18, 28, .42);
+    border: 1px solid rgba(140, 230, 255, .18);
+    border-radius: 6px; padding: 5px 9px;
+    font-size: 11.5px; line-height: 1.45;
+    animation: radioLife 15s ease-out forwards;
+  }
+  #radio .who { color: #7fe3ff; font-weight: 600; }
+  #radio .atc .who { color: #ffd257; }
+  @keyframes radioLife {
+    0%   { opacity: 0; transform: translateX(-10px); }
+    4%   { opacity: 1; transform: none; }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
   #mapPanel { right: 18px; bottom: 18px; padding: 8px; line-height: 0; }
   #map { display: block; width: 188px; height: 188px; border-radius: 4px; }
   #mapScale {
@@ -132,6 +152,8 @@
     <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
     <div class="row"><span class="k">BEST</span><span class="v" id="best">—</span></div>
   </div>
+
+  <div id="radio"></div>
 
   <div class="panel" id="mapPanel">
     <canvas id="map" width="188" height="188"></canvas>
@@ -874,6 +896,76 @@ function flash() {
 }
 
 // ---------------------------------------------------------------------------
+// Radio chatter
+// ---------------------------------------------------------------------------
+const STATION = 'SKYWARD CENTER';
+const radioEl = document.getElementById('radio');
+const RADIO_MAX = 5;
+
+// Messages age out on their own CSS animation, so posting one costs nothing
+// per frame.
+function radio(from, text, isAtc) {
+  const div = document.createElement('div');
+  div.className = 'msg' + (isAtc ? ' atc' : '');
+  div.innerHTML = `<span class="who">${from}</span> &nbsp;${text}`;
+  div.addEventListener('animationend', () => div.remove());
+  radioEl.appendChild(div);
+  while (radioEl.children.length > RADIO_MAX) radioEl.firstChild.remove();
+}
+
+// Altitudes read as feet on the radio even though the sim works in its own
+// units — "level four thousand" sounds like flying, "level 1400" does not.
+const FEET = 3;
+function feet(y) {
+  const ft = Math.round(y * FEET / 100) * 100;
+  return ft.toLocaleString('en-US');
+}
+
+function compass(yaw) {
+  const deg = (Math.round(THREE.MathUtils.radToDeg(Math.atan2(-Math.sin(yaw), -Math.cos(yaw)))) + 360) % 360;
+  return String(deg).padStart(3, '0');
+}
+
+// One exchange: an aircraft reports, and sometimes Center answers.
+function emitChatter() {
+  if (!traffic.length) return;
+  const a = traffic[Math.floor(Math.random() * traffic.length)];
+  const cs = a.callsign;
+
+  let said;
+  if (a.vy > 6) said = `climbing ${feet(a.legAlt)}.`;
+  else if (a.vy < -6) said = `descending ${feet(a.legAlt)}.`;
+  else {
+    said = [
+      `level ${feet(a.mesh.position.y)}.`,
+      `level ${feet(a.mesh.position.y)}, heading ${compass(a.yaw)}.`,
+      `with you, ${feet(a.mesh.position.y)}.`
+    ][Math.floor(Math.random() * 3)];
+  }
+
+  radio(cs, said, false);
+
+  if (Math.random() < 0.55) {
+    const reply = [
+      `${cs}, roger.`,
+      `${cs}, radar contact.`,
+      `${cs}, maintain ${feet(a.legAlt)}.`,
+      `${cs}, altimeter two niner niner two.`
+    ][Math.floor(Math.random() * 4)];
+    setTimeout(() => radio(STATION, reply, true), 900 + Math.random() * 700);
+  }
+}
+
+let chatterTimer = 5;
+function updateChatter(dt) {
+  chatterTimer -= dt;
+  if (chatterTimer <= 0) {
+    chatterTimer = 7 + Math.random() * 9;
+    emitChatter();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Minimap
 // ---------------------------------------------------------------------------
 const MAP_SIZE = 188;                 // on-screen size, CSS pixels
@@ -1328,6 +1420,11 @@ const trafficGeo = (() => {
 })();
 
 const LIVERIES = [0xf2f4f7, 0xdfe6ee, 0xc9d6e4, 0xe8d9c0, 0xd6e0d2, 0xf0e3e3];
+const OPERATORS = ['SKYHAWK', 'COASTAL', 'NOVA', 'ATLAS', 'PELICAN', 'MERIDIAN', 'HALCYON', 'KESTREL'];
+
+function makeCallsign(i) {
+  return `${OPERATORS[i % OPERATORS.length]} ${100 + Math.floor(Math.random() * 880)}`;
+}
 
 const TRAFFIC_TURN = 0.22;     // rad/s
 const TRAFFIC_BANK = 0.48;     // rad at full-rate turn
@@ -1424,7 +1521,8 @@ function spawnTraffic() {
 
     const entry = {
       mesh, speed: 100, cruise: 900, yaw: 0,
-      bank: 0, pitch: 0, vy: 0, wp: null, legAlt: 900
+      bank: 0, pitch: 0, vy: 0, wp: null, legAlt: 900,
+      callsign: makeCallsign(i)
     };
     placeTraffic(entry);
     traffic.push(entry);
@@ -1524,6 +1622,7 @@ window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
+  radio, emitChatter,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -1541,6 +1640,7 @@ function tick() {
     if (!courseDone) state.time += dt;
     updateFlight(dt);
     updateRings(dt, t);
+    updateChatter(dt);
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
   } else {
     // Idle fly-by while the title card is up.
