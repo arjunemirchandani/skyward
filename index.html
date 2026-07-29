@@ -2379,16 +2379,26 @@ const TRAFFIC_FAR = 7600;
 const TRAFFIC_NEAR_SPAWN = 2200;
 const TRAFFIC_FAR_SPAWN = 5600;
 
+const FORWARD_ARC_SHARE = 0.6;    // fraction respawned ahead of the player
+const CO_ALTITUDE_SHARE = 0.45;   // fraction given a cruise near the player's
+
 function placeTraffic(a) {
   const r = TRAFFIC_NEAR_SPAWN + Math.random() * (TRAFFIC_FAR_SPAWN - TRAFFIC_NEAR_SPAWN);
   const lim = WORLD * 0.46;
+
+  // Weight bearings toward the arc the player is flying into: traffic behind
+  // you is traffic you never see.
+  const ahead = Math.atan2(fwd.z, fwd.x);
+  const forward = Math.random() < FORWARD_ARC_SHARE;
 
   // Try bearings until one lands inside the world. Clamping instead would drag
   // the spawn point toward the player and pop an aircraft in at close range.
   let x = 0, z = 0;
   const toCentre = Math.atan2(-plane.position.z, -plane.position.x);
   for (let i = 0; i < 12; i++) {
-    const ang = i === 11 ? toCentre : Math.random() * Math.PI * 2;
+    const ang = i === 11 ? toCentre
+      : forward ? ahead + (Math.random() - 0.5) * 2.8
+                : Math.random() * Math.PI * 2;
     x = plane.position.x + Math.cos(ang) * r;
     z = plane.position.z + Math.sin(ang) * r;
     if (Math.abs(x) <= lim && Math.abs(z) <= lim) break;
@@ -2396,7 +2406,11 @@ function placeTraffic(a) {
   }
 
   a.speed = 70 + Math.random() * 80;
-  a.cruise = 620 + Math.random() * 1700;
+  // Some of the fleet cruises near your level, where it shows against the
+  // horizon instead of being lost against terrain or sky.
+  a.cruise = Math.random() < CO_ALTITUDE_SHARE
+    ? THREE.MathUtils.clamp(plane.position.y + (Math.random() - 0.5) * 800, 480, 2600)
+    : 620 + Math.random() * 1700;
   a.mesh.position.set(x, Math.max(terrainHeight(x, z) + 300, a.cruise), z);
   a.yaw = Math.random() * Math.PI * 2;
   a.bank = 0;
@@ -2441,28 +2455,47 @@ function setTrafficCount(n) {
   return traffic.length;
 }
 
-// ---- proximity alerting
-const TRAFFIC_ALERT = 750;     // start warning at this range
-const TRAFFIC_COLLIDE = 26;    // and this is a mid-air
-let threat = null;             // nearest aircraft, when inside the alert radius
-let threatDist = Infinity;
+// ---- conflict alerting
+// With a busy sky, "something is within X metres" is true most of the time and
+// the warning stops meaning anything. A contact only counts as a threat if it
+// is close, near your level, AND actually closing on you.
+const TRAFFIC_ALERT = 700;        // horizontal/slant range to consider
+const TRAFFIC_ALERT_VERT = 200;   // vertical separation that still counts
+const TRAFFIC_COLLIDE = 26;       // and this is a mid-air
+let threat = null;                // the conflicting aircraft, if any
+let threatDist = Infinity;        // distance to the NEAREST aircraft, for collision
 let blipTimer = 0;
+
+const relPos = new THREE.Vector3();
+const relVel = new THREE.Vector3();
 
 function scanTraffic(dt) {
   threat = null;
   threatDist = Infinity;
+  let conflictDist = Infinity;
 
   for (const a of traffic) {
-    const d = a.mesh.position.distanceTo(plane.position);
-    if (d < threatDist) { threatDist = d; threat = a; }
+    const p = a.mesh.position;
+    const d = p.distanceTo(plane.position);
+    if (d < threatDist) threatDist = d;
+
+    if (d > TRAFFIC_ALERT) continue;
+    if (Math.abs(p.y - plane.position.y) > TRAFFIC_ALERT_VERT) continue;
+
+    // Closing, or merely sharing the sky? Separating traffic is not a threat.
+    relPos.subVectors(p, plane.position);
+    relVel.set(Math.sin(a.yaw) * a.speed, a.vy, -Math.cos(a.yaw) * a.speed).sub(state.vel);
+    if (relPos.dot(relVel) >= 0) continue;
+
+    if (d < conflictDist) { conflictDist = d; threat = a; }
   }
 
-  if (threatDist > TRAFFIC_ALERT) { threat = null; blipTimer = 0; return; }
+  if (!threat) { blipTimer = 0; return; }
 
   // Blip faster the closer they get.
   blipTimer -= dt;
   if (blipTimer <= 0) {
-    blipTimer = THREE.MathUtils.clamp(threatDist / TRAFFIC_ALERT, 0.13, 1.0);
+    blipTimer = THREE.MathUtils.clamp(conflictDist / TRAFFIC_ALERT, 0.13, 1.0);
     tone(1180, 0.06, 0.13, 'square');
   }
 }
