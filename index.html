@@ -2467,6 +2467,83 @@ function scanTraffic(dt) {
   }
 }
 
+// ---- distance glints
+// Past a kilometre an airframe is barely a pixel wide and antialiasing erases
+// it. Real traffic stays visible much further out as a glint of sunlight, so
+// each aircraft gets a point sprite that fades in exactly as the mesh becomes
+// too small to see. All of them draw in a single call.
+const GLINT_MAX = 300;
+const GLINT_NEAR = 700;     // fully mesh below this
+const GLINT_FULL = 1500;    // glint at full strength beyond this
+const GLINT_FADE = 8600;    // gone by here, in step with the fog
+
+const glintTexture = (() => {
+  const s = 32, cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d');
+  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grd.addColorStop(0.0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.35, 'rgba(255,252,244,.75)');
+  grd.addColorStop(1.0, 'rgba(255,250,240,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, s, s);
+  return new THREE.CanvasTexture(cv);
+})();
+
+const glintPos = new Float32Array(GLINT_MAX * 3);
+const glintAlpha = new Float32Array(GLINT_MAX);
+const glintGeo = new THREE.BufferGeometry();
+glintGeo.setAttribute('position', new THREE.BufferAttribute(glintPos, 3));
+glintGeo.setAttribute('aAlpha', new THREE.BufferAttribute(glintAlpha, 1));
+glintGeo.setDrawRange(0, 0);
+
+const glints = new THREE.Points(glintGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, fog: false,
+  uniforms: {
+    uTex: { value: glintTexture },
+    uSize: { value: 5.5 * Math.min(devicePixelRatio || 1, 2) }
+  },
+  vertexShader: `
+    attribute float aAlpha;
+    varying float vAlpha;
+    uniform float uSize;
+    void main() {
+      vAlpha = aAlpha;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = uSize;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform sampler2D uTex;
+    varying float vAlpha;
+    void main() {
+      vec4 t = texture2D(uTex, gl_PointCoord);
+      gl_FragColor = vec4(t.rgb, t.a * vAlpha);
+      if (gl_FragColor.a < 0.01) discard;
+    }`
+}));
+glints.frustumCulled = false;
+scene.add(glints);
+
+function updateGlints() {
+  let n = 0;
+  for (let i = 0; i < traffic.length && n < GLINT_MAX; i++) {
+    const p = traffic[i].mesh.position;
+    const d = p.distanceTo(camera.position);
+    if (d < GLINT_NEAR || d > GLINT_FADE) continue;
+
+    const rise = Math.min(1, (d - GLINT_NEAR) / (GLINT_FULL - GLINT_NEAR));
+    const fall = Math.min(1, (GLINT_FADE - d) / 2200);
+    glintPos[n * 3] = p.x; glintPos[n * 3 + 1] = p.y; glintPos[n * 3 + 2] = p.z;
+    glintAlpha[n] = rise * fall * 0.95;
+    n++;
+  }
+  glintGeo.setDrawRange(0, n);
+  glintGeo.attributes.position.needsUpdate = true;
+  glintGeo.attributes.aAlpha.needsUpdate = true;
+  return n;
+}
+
 const tFwd = new THREE.Vector3();
 const tEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -2536,7 +2613,7 @@ window.SKYWARD = {
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
-  updateFlight, approachInfo, updateApproach,
+  updateFlight, approachInfo, updateApproach, updateGlints, glints,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -2573,6 +2650,7 @@ function tick() {
   updateApproach();
   updateMarker();
   updateEngine();
+  updateGlints();
   drawMap(t);
 
   renderer.render(scene, camera);
