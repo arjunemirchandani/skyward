@@ -128,6 +128,7 @@
   #banner.on { opacity: 1; }
   #banner b { display: block; font-size: 34px; letter-spacing: 8px; color: #eafcff; font-weight: 400; }
 
+  #missionResult,
   #landing {
     position: absolute; left: 50%; top: 30%; transform: translate(-50%, -50%);
     min-width: 300px; padding: 16px 22px;
@@ -136,23 +137,23 @@
     border-radius: 10px; backdrop-filter: blur(4px);
     opacity: 0; transition: opacity .35s; text-align: left;
   }
-  #landing.on { opacity: 1; }
-  #landing .hd {
+  #landing.on, #missionResult.on { opacity: 1; }
+  #landing .hd, #missionResult .hd {
     font-size: 13px; letter-spacing: 4px; opacity: .75;
     padding-bottom: 9px; margin-bottom: 9px;
     border-bottom: 1px solid rgba(140, 230, 255, .18);
   }
-  #landing .hd b { float: right; font-size: 20px; letter-spacing: 0; color: #8affc1; opacity: 1; }
-  #landing table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #landing td { padding: 2px 0; }
-  #landing td:first-child { opacity: .6; letter-spacing: 1px; }
-  #landing td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: #eafcff; }
-  #landing .score {
+  #landing .hd b, #missionResult .hd b { float: right; font-size: 20px; letter-spacing: 0; color: #8affc1; opacity: 1; }
+  #landing table, #missionResult table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #landing td, #missionResult td { padding: 2px 0; }
+  #landing td:first-child, #missionResult td:first-child { opacity: .6; letter-spacing: 1px; }
+  #landing td:last-child, #missionResult td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: #eafcff; }
+  #landing .score, #missionResult .score {
     margin-top: 11px; padding-top: 9px; font-size: 12px; letter-spacing: 3px; opacity: .7;
     border-top: 1px solid rgba(140, 230, 255, .18);
   }
-  #landing .score b { float: right; font-size: 19px; letter-spacing: 0; color: #eafcff; opacity: 1; }
-  #landing .score span { display: block; clear: both; padding-top: 6px; font-size: 10px; opacity: .65; }
+  #landing .score b, #missionResult .score b { float: right; font-size: 19px; letter-spacing: 0; color: #eafcff; opacity: 1; }
+  #landing .score span, #missionResult .score span { display: block; clear: both; padding-top: 6px; font-size: 10px; opacity: .65; }
 
   #flash {
     position: fixed; inset: 0; background: #ff8a3d; opacity: 0;
@@ -232,6 +233,17 @@
   <div id="reticle"></div>
   <div id="marker"><span id="marker-dist"></span></div>
   <div id="banner"></div>
+
+  <div id="missionResult">
+    <div class="hd">MISSION <b id="mrGrade">A</b></div>
+    <table>
+      <tr><td>ROUTE</td><td id="mrRoute">—</td></tr>
+      <tr><td>GATES</td><td id="mrGates">—</td></tr>
+      <tr><td>TOUCHDOWN</td><td id="mrLanding">—</td></tr>
+      <tr><td>TIME</td><td id="mrTime">—</td></tr>
+    </table>
+    <div class="score">SCORE <b id="mrScore">0</b><span id="mrBest"></span></div>
+  </div>
 
   <div id="landing">
     <div class="hd">TOUCHDOWN <b id="ldGrade">A</b></div>
@@ -2533,6 +2545,62 @@ function showLanding(v) {
   landingPanelTimer = 7;
 }
 
+const mrEl = {
+  panel: document.getElementById('missionResult'),
+  grade: document.getElementById('mrGrade'),
+  route: document.getElementById('mrRoute'),
+  gates: document.getElementById('mrGates'),
+  landing: document.getElementById('mrLanding'),
+  time: document.getElementById('mrTime'),
+  score: document.getElementById('mrScore'),
+  best: document.getElementById('mrBest')
+};
+let missionPanelTimer = 0;
+
+// Balanced three ways: how much of the route you flew, how well you arrived,
+// and how long it took. Skipping gates to get down sooner is a real trade,
+// not a bug — it costs more than the time it saves.
+function completeMission(v) {
+  mission.phase = 'complete';
+  mission.landing = v;
+
+  const gatesFlown = nextRing;
+  const routeDist = Math.hypot(mission.dest.x - mission.origin.x, mission.dest.z - mission.origin.z);
+  const par = routeDist / 190 + mission.gatesTotal * 4;
+
+  const gateScore = 40 * (mission.gatesTotal ? gatesFlown / mission.gatesTotal : 1);
+  const landScore = 40 * (v.score / 100);
+  const timeScore = 20 * taper(mission.t, par, par * 2);
+
+  const total = Math.round(gateScore + landScore + timeScore);
+  mission.score = total;
+  const grade = total >= 93 ? 'A+' : total >= 85 ? 'A' : total >= 72 ? 'B'
+              : total >= 58 ? 'C' : total >= 44 ? 'D' : 'E';
+
+  mrEl.grade.textContent = grade;
+  mrEl.route.textContent = `${mission.origin.name.split(' ')[0]} → ${mission.dest.name.split(' ')[0]}`;
+  mrEl.gates.textContent = `${gatesFlown}/${mission.gatesTotal}   ${Math.round(gateScore)}/40`;
+  mrEl.landing.textContent = `${v.grade}   ${Math.round(landScore)}/40`;
+  mrEl.time.textContent = `${mission.t.toFixed(1)}s   ${Math.round(timeScore)}/20`;
+  mrEl.score.textContent = total;
+
+  const record = bestMission === null || total > bestMission;
+  if (record) {
+    bestMission = total;
+    localStorage.setItem(MISSION_KEY, String(total));
+  }
+  mrEl.best.textContent = record ? 'NEW BEST MISSION' : `BEST ${bestMission}`;
+
+  mrEl.panel.classList.add('on');
+  missionPanelTimer = 9;
+
+  tone(660, 0.24, 0.2, 'triangle');
+  tone(880, 0.24, 0.2, 'triangle', 0.15);
+  tone(1320, 0.5, 0.18, 'triangle', 0.3);
+
+  atcToPlayer(`${PLAYER_CS}, welcome to ${mission.dest.name}. ${gatesFlown} of ${mission.gatesTotal} gates, ${mission.t.toFixed(0)} seconds, mission score ${total}.${record ? ' Personal best.' : ''} Press B when you are ready to go again.`);
+}
+
 function touchDown(r, v) {
   state.onGround = true;
   state.stopped = false;
@@ -2543,13 +2611,25 @@ function touchDown(r, v) {
   plane.position.y = r.f.elev + 1.2;
   state.vel.y = 0;
 
-  showLanding(v);
   chime(Math.max(1, Math.round(v.score / 12)));
+
+  // Arriving where you were sent finishes the job; anywhere else is just a
+  // landing, and Center will say so.
+  if (mission.active && mission.phase !== 'complete' && r.f === mission.dest) {
+    completeMission(v);
+    return;
+  }
+
+  showLanding(v);
 
   const remark = v.score >= 87 ? 'Nicely flown.'
                : v.score >= 60 ? 'Welcome in.'
                : 'Firm one.';
-  atcToPlayer(`${PLAYER_CS}, ${r.f.name}, roger, down runway ${v.rwy}. ${remark}`);
+  let extra = '';
+  if (mission.active && mission.phase !== 'complete') {
+    extra = ` Your destination is ${mission.dest.name}.`;
+  }
+  atcToPlayer(`${PLAYER_CS}, ${r.f.name}, roger, down runway ${v.rwy}. ${remark}${extra}`);
 }
 
 // Rolling on the strip: steer with the pedals, brake, and rotate off again once
@@ -3008,7 +3088,7 @@ window.SKYWARD = {
   updateFlight, updateHud, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
   preferredEnd, windsocks, updateWindsocks,
-  mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission,
+  mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -3032,6 +3112,7 @@ function tick() {
     updateMission(dt);
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
     if (landingPanelTimer > 0 && (landingPanelTimer -= dt) <= 0) ldEl.panel.classList.remove('on');
+    if (missionPanelTimer > 0 && (missionPanelTimer -= dt) <= 0) mrEl.panel.classList.remove('on');
   } else {
     // Idle fly-by while the title card is up.
     axes();
