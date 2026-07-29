@@ -1202,6 +1202,15 @@ function emitChatter() {
   }
   if (dest) lines.push(`${feet(a.mesh.position.y)}, direct ${dest}.`);
 
+  // Aircraft near a field talk about the field.
+  const fld = nearestAirfield(a.mesh.position.x, a.mesh.position.z);
+  if (fld && fld.dist < 5000) {
+    const miles = Math.max(1, Math.round(fld.dist / MILE));
+    const dir = bearingWord(fld.field.x, fld.field.z, a.mesh.position.x, a.mesh.position.z).toLowerCase();
+    lines.push(`${miles} mile${miles === 1 ? '' : 's'} ${dir} of ${fld.field.name}, ${feet(a.mesh.position.y)}.`);
+    if (fld.dist < 2600) lines.push(`${feet(a.mesh.position.y)}, inbound ${fld.field.name}.`);
+  }
+
   let line = pickFrom(lines);
   for (let i = 0; i < 6 && `${cs} ${line}` === lastLine && lines.length > 1; i++) line = pickFrom(lines);
   lastSpeaker = a;
@@ -1212,6 +1221,7 @@ function emitChatter() {
   if (Math.random() < 0.6) {
     const replies = [`${cs}, roger.`, `${cs}, radar contact.`, `${cs}, altimeter two niner niner two.`];
     if (dest) replies.push(`${cs}, cleared direct ${dest}.`);
+    if (fld && fld.dist < 2600) replies.push(`${cs}, expect the visual, runway ${fld.field.rwy} at ${fld.field.name}.`);
     if (here) replies.push(`${cs}, report ${nearestPoint(a.mesh.position.x, a.mesh.position.z).point.name}.`);
     replies.push(`${cs}, maintain ${feet(a.legAlt)}.`);
     setTimeout(() => radio(STATION, pickFrom(replies), true), 900 + Math.random() * 700);
@@ -1474,6 +1484,15 @@ const reportingPoints = (() => {
 const MILE = 1000;   // world units per radio "mile"
 const CARDINALS = ['NORTH', 'NORTHEAST', 'EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST'];
 
+function nearestAirfield(x, z) {
+  let best = null, bestD = Infinity;
+  for (const f of airfields) {
+    const d = Math.hypot(f.x - x, f.z - z);
+    if (d < bestD) { bestD = d; best = f; }
+  }
+  return best ? { field: best, dist: bestD } : null;
+}
+
 function nearestPoint(x, z) {
   let best = null, bestD = Infinity;
   for (const p of reportingPoints) {
@@ -1565,8 +1584,46 @@ function drawRings(t) {
 const LABEL_MAX = 6;
 const placedLabels = [];
 
+// Airfields are drawn first and reserve their label boxes, so an island name
+// can never crowd out a runway you might want to land on.
+function drawAirfields() {
+  const half = (RUNWAY_LEN / 2) / mapSpan * MAP_SIZE;
+  mx.font = '600 8px ui-monospace, Menlo, monospace';
+  mx.textAlign = 'center';
+  mx.textBaseline = 'middle';
+  mx.lineJoin = 'round';
+
+  for (const f of airfields) {
+    mapPx(f.x, f.z, px);
+    const x = px[0], y = px[1];
+    if (x < -20 || x > MAP_SIZE + 20 || y < -20 || y > MAP_SIZE + 20) continue;
+
+    // The strip itself, drawn to scale along its heading.
+    const ax = f.sin, az = -f.cos;
+    mx.beginPath();
+    mx.moveTo(x - ax * half, y - az * half);
+    mx.lineTo(x + ax * half, y + az * half);
+    mx.strokeStyle = 'rgba(10, 18, 26, .85)';
+    mx.lineWidth = 4;
+    mx.stroke();
+    mx.strokeStyle = '#ffcf8a';
+    mx.lineWidth = 2;
+    mx.stroke();
+
+    const label = f.name;
+    const w = mx.measureText(label).width;
+    if (x - w / 2 < 3 || x + w / 2 > MAP_SIZE - 3 || y < 6 || y > MAP_SIZE - 14) continue;
+
+    placedLabels.push({ x0: x - w / 2 - 2, x1: x + w / 2 + 2, y0: y + 2, y1: y + 13 });
+    mx.strokeStyle = 'rgba(6, 16, 24, .85)';
+    mx.lineWidth = 2.5;
+    mx.strokeText(label, x, y + 8);
+    mx.fillStyle = '#ffcf8a';
+    mx.fillText(label, x, y + 8);
+  }
+}
+
 function drawPlaceNames() {
-  placedLabels.length = 0;
   mx.font = '600 8px ui-monospace, Menlo, monospace';
   mx.textAlign = 'center';
   mx.textBaseline = 'middle';
@@ -1700,6 +1757,8 @@ function drawMap(t) {
     );
   }
 
+  placedLabels.length = 0;
+  drawAirfields();
   drawPlaceNames();
 
   // Range circle at a quarter of the span, as a distance reference.
