@@ -52,6 +52,27 @@
   #reticle:before { left: 0; right: 0; top: 50%; height: 1px; }
   #reticle:after  { top: 0; bottom: 0; left: 50%; width: 1px; }
 
+  #ils {
+    right: 18px; top: 132px; width: 132px; text-align: center;
+    opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+  #ils.on { opacity: 1; }
+  #ils .hd { font-size: 10px; letter-spacing: 1px; opacity: .7; margin-bottom: 8px; }
+  #ils .hd b { display: block; font-size: 15px; letter-spacing: 2px; color: #ffcf8a; opacity: 1; margin-top: 2px; }
+  #ils .cross {
+    position: relative; width: 104px; height: 104px; margin: 0 auto;
+    border: 1px solid rgba(140, 230, 255, .25); border-radius: 50%;
+  }
+  /* Course and glidepath needles. Each shows where the beam is, so you fly toward it. */
+  #ils .cross i { position: absolute; background: #8affc1; box-shadow: 0 0 6px rgba(138,255,193,.6); }
+  #ils .loc { top: 8px; bottom: 8px; width: 2px; left: 50%; margin-left: -1px; }
+  #ils .gs  { left: 8px; right: 8px; height: 2px; top: 50%; margin-top: -1px; }
+  #ils .cross u {
+    position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+    margin: -3.5px 0 0 -3.5px; border: 1px solid rgba(205,246,255,.9); border-radius: 50%;
+  }
+  #ils .ft { margin-top: 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
+
   #radio {
     position: absolute; left: 18px; top: 200px; width: 340px;
     display: flex; flex-direction: column; gap: 5px;
@@ -178,6 +199,16 @@
     <div class="row"><span class="k">NEXT</span><span class="v" id="next">—</span></div>
     <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
     <div class="row"><span class="k">BEST</span><span class="v" id="best">—</span></div>
+  </div>
+
+  <div class="panel" id="ils">
+    <div class="hd"><span id="ilsField">—</span><b id="ilsRwy"></b></div>
+    <div class="cross">
+      <i class="loc" id="ilsLoc"></i>
+      <i class="gs" id="ilsGs"></i>
+      <u></u>
+    </div>
+    <div class="ft"><span id="ilsDist">—</span></div>
   </div>
 
   <div id="radio"></div>
@@ -2037,6 +2068,82 @@ function judgeLanding(r) {
            rwy: dir > 0 ? f.rwy : f.rwyReciprocal };
 }
 
+// ---------------------------------------------------------------------------
+// Approach guidance
+// ---------------------------------------------------------------------------
+const GLIDESLOPE = THREE.MathUtils.degToRad(4.5);   // a touch steep, easier to fly
+const ILS_RANGE = 8000;
+const LOC_FULL = 4;    // degrees of course error at full needle deflection
+const GS_FULL = 2.5;   // degrees of path error at full deflection
+
+// Where you are relative to the approach path of the nearest field.
+function approachInfo() {
+  const near = nearestAirfield(plane.position.x, plane.position.z);
+  if (!near || near.dist > ILS_RANGE) return null;
+  const f = near.field;
+
+  const heading = new THREE.Vector3(fwd.x, 0, fwd.z);
+  if (heading.lengthSq() < 1e-6) return null;
+  heading.normalize();
+
+  // Guide to whichever end you are pointed at.
+  const dir = heading.x * f.sin + heading.z * -f.cos >= 0 ? 1 : -1;
+
+  const dx = plane.position.x - f.x, dz = plane.position.z - f.z;
+  const u = dx * f.sin - dz * f.cos;
+  const v = dx * f.cos + dz * f.sin;
+
+  const toThreshold = dir > 0 ? -RUNWAY_LEN / 2 - u : u - RUNWAY_LEN / 2;
+  const lateral = dir > 0 ? v : -v;
+  const reach = Math.max(60, toThreshold);
+
+  const locDeg = THREE.MathUtils.radToDeg(Math.atan2(lateral, reach));
+  const pathDeg = THREE.MathUtils.radToDeg(Math.atan2(plane.position.y - f.elev, reach));
+  const gsDeg = pathDeg - THREE.MathUtils.radToDeg(GLIDESLOPE);
+
+  return {
+    field: f, rwy: dir > 0 ? f.rwy : f.rwyReciprocal,
+    toThreshold, locDeg, gsDeg,
+    aligned: Math.abs(locDeg) < LOC_FULL && toThreshold > 0
+  };
+}
+
+const ilsEl = {
+  panel: document.getElementById('ils'),
+  field: document.getElementById('ilsField'),
+  rwy: document.getElementById('ilsRwy'),
+  loc: document.getElementById('ilsLoc'),
+  gs: document.getElementById('ilsGs'),
+  dist: document.getElementById('ilsDist')
+};
+
+function updateApproach() {
+  const a = (state.started && !state.onGround && !state.crashed) ? approachInfo() : null;
+  if (!a || a.toThreshold < -RUNWAY_LEN) { ilsEl.panel.classList.remove('on'); return; }
+
+  ilsEl.panel.classList.add('on');
+  ilsEl.field.textContent = a.field.name;
+  ilsEl.rwy.textContent = `RWY ${a.rwy}`;
+  ilsEl.dist.textContent = a.toThreshold > 0
+    ? `${Math.round(a.toThreshold)} m`
+    : 'OVER FIELD';
+
+  // Needles show the beam: right of course puts the bar to your left.
+  const lx = -THREE.MathUtils.clamp(a.locDeg / LOC_FULL, -1, 1) * 42;
+  const gy = THREE.MathUtils.clamp(a.gsDeg / GS_FULL, -1, 1) * 42;
+  ilsEl.loc.style.transform = `translateX(${lx.toFixed(1)}px)`;
+  ilsEl.gs.style.transform = `translateY(${gy.toFixed(1)}px)`;
+
+  const off = Math.abs(a.locDeg) > LOC_FULL * 0.6 || Math.abs(a.gsDeg) > GS_FULL * 0.6;
+  ilsEl.loc.style.background = ilsEl.gs.style.background = off ? '#ffb35a' : '#8affc1';
+
+  // Clearance, once you are actually established on final.
+  if (a.aligned && a.toThreshold < 4000 && Math.abs(a.gsDeg) < GS_FULL) {
+    atcAdvise(`land-${a.field.name}-${a.rwy}`,
+      `${PLAYER_CS}, ${a.field.name}, cleared to land runway ${a.rwy}.`, 40);
+  }
+}
+
 const ldEl = {
   panel: document.getElementById('landing'),
   grade: document.getElementById('ldGrade'),
@@ -2408,7 +2515,7 @@ window.SKYWARD = {
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
-  updateFlight,
+  updateFlight, approachInfo, updateApproach,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -2442,6 +2549,7 @@ function tick() {
   ocean.position.x = camera.position.x;
   ocean.position.z = camera.position.z;
   updateHud();
+  updateApproach();
   updateMarker();
   updateEngine();
   drawMap(t);
