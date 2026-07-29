@@ -114,7 +114,8 @@
     Q / E &nbsp; rudder<br>
     &uarr; / &darr; &nbsp; throttle<br>
     C camera &nbsp;&middot;&nbsp; R respawn<br>
-    N new course &nbsp;&middot;&nbsp; M mute
+    N new course &nbsp;&middot;&nbsp; M mute<br>
+    Z &nbsp; map zoom
   </div>
 
   <div class="panel" id="left">
@@ -157,6 +158,7 @@
       <tr><td>C</td><td>chase / cockpit view</td></tr>
       <tr><td>R</td><td>respawn</td></tr>
       <tr><td>N / M</td><td>new course / mute</td></tr>
+      <tr><td>Z</td><td>minimap zoom</td></tr>
     </table>
     <div class="sub" style="letter-spacing:2px;margin-bottom:18px">FLY THROUGH ALL 12 GOLD RINGS &mdash; BEAT YOUR TIME</div>
     <div class="go">PRESS ANY KEY TO FLY</div>
@@ -707,7 +709,7 @@ function boom() {
 // ---------------------------------------------------------------------------
 const keys = new Set();
 const TRACKED = new Set([
-  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN',
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ',
   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
 ]);
 
@@ -718,6 +720,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
   if (e.code === 'KeyM') { muted = !muted; setBanner(muted ? 'SOUND OFF' : 'SOUND ON', 0.9); }
   if (e.code === 'KeyN') newCourse();
+  if (e.code === 'KeyZ') cycleMapZoom();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -880,7 +883,14 @@ const mx = mapCanvas.getContext('2d');
   mx.scale(dpr, dpr);
 }
 
-let mapSpan = 5000;                   // world units visible across the map
+const MAP_SPANS = [2500, 5000, 10000];
+let mapZoom = 1;
+let mapSpan = MAP_SPANS[mapZoom];     // world units visible across the map
+
+function cycleMapZoom() {
+  mapZoom = (mapZoom + 1) % MAP_SPANS.length;
+  mapSpan = MAP_SPANS[mapZoom];
+}
 
 // The whole world, baked once into an offscreen canvas: land colours from the
 // same palette as the terrain mesh, depth-shaded ocean, and a hillshade pass so
@@ -1063,6 +1073,13 @@ function drawMap(t) {
     );
   }
 
+  // Range circle at a quarter of the span, as a distance reference.
+  mx.beginPath();
+  mx.arc(MAP_SIZE / 2, MAP_SIZE / 2, MAP_SIZE / 4, 0, Math.PI * 2);
+  mx.strokeStyle = 'rgba(205, 246, 255, .16)';
+  mx.lineWidth = 1;
+  mx.stroke();
+
   drawRings(t);
   drawPlayer();
 
@@ -1077,7 +1094,7 @@ function drawMap(t) {
   mx.textBaseline = 'top';
   mx.fillText('N', MAP_SIZE / 2, 5);
 
-  mapScaleEl.textContent = (mapSpan / 1000).toFixed(1) + ' km';
+  mapScaleEl.textContent = (mapSpan / 1000).toFixed(1) + ' KM  ·  Z';
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1238,9 @@ const clock = new THREE.Clock();
 window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
+  cycleMapZoom,
+  get mapZoom() { return mapZoom; },
+  get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
   get courseDone() { return courseDone; }
 };
