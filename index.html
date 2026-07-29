@@ -339,6 +339,13 @@ const RUNWAY_WID = 60;
 const APRON = 130;          // flat ground beyond the runway edges
 const PAD_RAMP = 260;       // distance over which the pad blends into terrain
 
+// Runway designators come from the heading: 090 -> "09".
+function runwayNumber(headingRad) {
+  const deg = (THREE.MathUtils.radToDeg(headingRad) + 360) % 360;
+  const n = Math.round(deg / 10);
+  return String(n === 0 ? 36 : n).padStart(2, '0');
+}
+
 // How uneven the ground is within `reach` of a point.
 function roughnessAt(x, z, reach) {
   let lo = Infinity, hi = -Infinity;
@@ -396,6 +403,8 @@ const airfields = (() => {
       elev: Math.max(c.elev, 22),                      // keep the strip above the surf
       heading,
       sin: Math.sin(heading), cos: Math.cos(heading),
+      rwy: runwayNumber(heading),
+      rwyReciprocal: runwayNumber(heading + Math.PI),
       name: null                                       // named once the islands are
     });
   }
@@ -477,6 +486,97 @@ const ocean = new THREE.Mesh(
 );
 ocean.position.y = SEA_LEVEL;
 scene.add(ocean);
+
+// ---------------------------------------------------------------------------
+// Runway surfaces
+// ---------------------------------------------------------------------------
+// Painted into a canvas in runway-local units: across the strip runs left to
+// right, along it runs bottom (the runway's own threshold) to top.
+function runwayTexture(rwy, reciprocal) {
+  const PX_W = 128, PX_H = 2048;
+  const sx = PX_W / RUNWAY_WID;          // pixels per world unit across
+  const sy = PX_H / RUNWAY_LEN;          // and along
+  const cv = document.createElement('canvas');
+  cv.width = PX_W; cv.height = PX_H;
+  const g = cv.getContext('2d');
+
+  g.fillStyle = '#34383d';
+  g.fillRect(0, 0, PX_W, PX_H);
+
+  // Faint longitudinal wear either side of the centreline.
+  g.fillStyle = 'rgba(20,22,25,.35)';
+  g.fillRect(PX_W * 0.30, 0, PX_W * 0.10, PX_H);
+  g.fillRect(PX_W * 0.60, 0, PX_W * 0.10, PX_H);
+
+  g.fillStyle = '#eef2f5';
+
+  // Edge stripes.
+  const edgeW = 2.5 * sx, inset = 2 * sx;
+  g.fillRect(inset, 0, edgeW, PX_H);
+  g.fillRect(PX_W - inset - edgeW, 0, edgeW, PX_H);
+
+  // Centreline dashes.
+  const dash = 30 * sy, gap = 22 * sy, clW = 1.6 * sx;
+  for (let y = 120 * sy; y < PX_H - 120 * sy; y += dash + gap) {
+    g.fillRect(PX_W / 2 - clW / 2, y, clW, dash);
+  }
+
+  // Threshold bars at both ends.
+  const barL = 34 * sy, barW = 3.2 * sx, bars = 6;
+  for (let i = 0; i < bars; i++) {
+    const x = PX_W * (0.14 + i * 0.145);
+    g.fillRect(x, 14 * sy, barW, barL);
+    g.fillRect(x, PX_H - 14 * sy - barL, barW, barL);
+  }
+
+  // Touchdown zone markers, a fixed distance in from each threshold.
+  for (const d of [150, 240]) {
+    const h = 24 * sy, w = 3.4 * sx;
+    for (const side of [-1, 1]) {
+      const x = PX_W / 2 + side * 7 * sx - w / 2;
+      g.fillRect(x, d * sy, w, h);
+      g.fillRect(x, PX_H - d * sy - h, w, h);
+    }
+  }
+
+  // Designators, each read by the pilot arriving at that end. The texture's
+  // BOTTOM edge is the threshold you cross when landing on `rwy` (UVs put v=0
+  // at the geometry's -Y, which the mesh rotation puts at the near end), so
+  // that number sits at the bottom, upright.
+  g.font = `700 ${Math.round(34 * sy)}px ui-monospace, Menlo, monospace`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  g.save();
+  g.translate(PX_W / 2, PX_H - 92 * sy);
+  g.fillText(rwy, 0, 0);
+  g.restore();
+
+  g.save();
+  g.translate(PX_W / 2, 92 * sy);
+  g.rotate(Math.PI);                     // read from the opposite approach
+  g.fillText(reciprocal, 0, 0);
+  g.restore();
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+for (const f of airfields) {
+  const geo = new THREE.PlaneGeometry(RUNWAY_WID, RUNWAY_LEN);
+  geo.rotateX(-Math.PI / 2);             // local +Y ends up along the heading
+
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    map: runwayTexture(f.rwy, f.rwyReciprocal),
+    roughness: 0.92, metalness: 0.0
+  }));
+  mesh.position.set(f.x, f.elev + 0.35, f.z);
+  mesh.rotation.y = -f.heading;
+  scene.add(mesh);
+  f.mesh = mesh;
+}
 
 // ---------------------------------------------------------------------------
 // Clouds — soft billboards
@@ -1358,13 +1458,6 @@ const reportingPoints = (() => {
   });
 })();
 
-// Runway designators come from the magnetic-style heading: 090 -> "09".
-function runwayNumber(headingRad) {
-  const deg = (THREE.MathUtils.radToDeg(headingRad) + 360) % 360;
-  const n = Math.round(deg / 10);
-  return String(n === 0 ? 36 : n).padStart(2, '0');
-}
-
 // Airfields borrow the name of whatever island they were sited on, so ATC and
 // the map agree with the chatter.
 (() => {
@@ -1374,10 +1467,7 @@ function runwayNumber(headingRad) {
       const d = Math.hypot(p.x - f.x, p.z - f.z);
       if (d < bestD) { bestD = d; best = p; }
     }
-    const stem = best ? best.name.split(' ')[0] : 'SKYWARD';
-    f.name = `${stem} FIELD`;
-    f.rwy = runwayNumber(f.heading);
-    f.rwyReciprocal = runwayNumber(f.heading + Math.PI);
+    f.name = `${best ? best.name.split(' ')[0] : 'SKYWARD'} FIELD`;
   }
 })();
 
