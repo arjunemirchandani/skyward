@@ -882,12 +882,87 @@ const mx = mapCanvas.getContext('2d');
 
 let mapSpan = 5000;                   // world units visible across the map
 
+// The whole world, baked once into an offscreen canvas: land colours from the
+// same palette as the terrain mesh, depth-shaded ocean, and a hillshade pass so
+// ridges and valleys read at a glance.
+const MAP_BAKE = 320;
+const bakedMap = (() => {
+  const N = MAP_BAKE;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(N, N);
+  const step = WORLD / N;
+
+  const heights = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    const z = -WORLD / 2 + (j + 0.5) * step;
+    for (let i = 0; i < N; i++) {
+      heights[j * N + i] = terrainHeight(-WORLD / 2 + (i + 0.5) * step, z);
+    }
+  }
+
+  const SHALLOW = new THREE.Color(0x6ab4d8);
+  const DEEP = new THREE.Color(0x16405f);
+  const c = new THREE.Color();
+
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      const h = heights[k];
+
+      // Central differences off the grid — no extra noise sampling needed.
+      const dx = (heights[j * N + Math.min(N - 1, i + 1)] - heights[j * N + Math.max(0, i - 1)]) / (2 * step);
+      const dz = (heights[Math.min(N - 1, j + 1) * N + i] - heights[Math.max(0, j - 1) * N + i]) / (2 * step);
+
+      if (h < SEA_LEVEL) {
+        c.copy(SHALLOW).lerp(DEEP, Math.min(1, Math.sqrt(-h / 220)));
+      } else {
+        terrainColor(h, Math.min(1, Math.hypot(dx, dz)), c);
+        // Sun from the north-west, same idea as the 3D lighting.
+        const shade = THREE.MathUtils.clamp(1 - (dx + dz) * 1.6, 0.45, 1.55);
+        c.multiplyScalar(shade);
+      }
+
+      const o = k * 4;
+      img.data[o]     = Math.min(255, c.r * 255);
+      img.data[o + 1] = Math.min(255, c.g * 255);
+      img.data[o + 2] = Math.min(255, c.b * 255);
+      img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return cv;
+})();
+
+// World position -> pixel in the baked map.
+function bakePx(v) { return (v + WORLD / 2) / WORLD * MAP_BAKE; }
+
 function drawMap() {
   mx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
 
-  // Placeholder ground until the terrain map is baked in.
-  mx.fillStyle = '#0d2b40';
+  // Anything past the edge of the world stays flat void.
+  mx.fillStyle = '#071723';
   mx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
+
+  // Player-centred, north-up window onto the baked world.
+  const half = mapSpan / 2;
+  const sx = bakePx(plane.position.x - half);
+  const sy = bakePx(plane.position.z - half);
+  const sw = mapSpan / WORLD * MAP_BAKE;
+  const scale = MAP_SIZE / sw;   // destination pixels per source pixel
+
+  // drawImage clips a source rect that runs off the image, so clip the
+  // destination to match and the map stays correctly registered at the edges.
+  const cx0 = Math.max(0, -sx), cy0 = Math.max(0, -sy);
+  const cx1 = Math.min(sw, MAP_BAKE - sx), cy1 = Math.min(sw, MAP_BAKE - sy);
+  if (cx1 > cx0 && cy1 > cy0) {
+    mx.drawImage(
+      bakedMap,
+      sx + cx0, sy + cy0, cx1 - cx0, cy1 - cy0,
+      cx0 * scale, cy0 * scale, (cx1 - cx0) * scale, (cy1 - cy0) * scale
+    );
+  }
 
   // Frame and north marker.
   mx.strokeStyle = 'rgba(140, 230, 255, .35)';
