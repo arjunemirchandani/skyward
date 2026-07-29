@@ -351,9 +351,55 @@ scene.add(sky);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 
+const SUN_DIR = new THREE.Vector3(0.45, 0.55, 0.7).normalize();
+
 const sun = new THREE.DirectionalLight(0xfff4e2, 2.6);
-sun.position.set(0.45, 0.55, 0.7).multiplyScalar(3000);
+sun.position.copy(SUN_DIR).multiplyScalar(3000);
 scene.add(sun);
+
+// Shadows. The world is 14 km across, so a single fixed shadow camera would be
+// useless; instead a small high-resolution box follows the aircraft, sized to
+// its height so the shadow stays sharp exactly when it matters — in the flare,
+// where it is the depth cue that tells you how high you actually are.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 5200;
+sun.shadow.bias = -0.0008;
+sun.shadow.normalBias = 0.6;
+
+const sunTarget = new THREE.Object3D();
+scene.add(sunTarget);
+sun.target = sunTarget;
+
+const shadowFocus = new THREE.Vector3();
+let shadowExtent = 0;
+
+function updateSunShadow() {
+  const groundY = Math.max(terrainHeight(plane.position.x, plane.position.z), SEA_LEVEL);
+  const agl = Math.max(0, plane.position.y - groundY);
+
+  // Aim between the aircraft and where its shadow falls, so both are inside.
+  const reach = Math.min(agl, 520) / SUN_DIR.y;
+  shadowFocus.copy(plane.position).addScaledVector(SUN_DIR, -reach * 0.5);
+
+  sunTarget.position.copy(shadowFocus);
+  sunTarget.updateMatrixWorld();
+  sun.position.copy(shadowFocus).addScaledVector(SUN_DIR, 2400);
+  sun.updateMatrixWorld();
+
+  // Tighten the box when low: at 30 m the aircraft covers ~45 shadow texels.
+  const want = THREE.MathUtils.clamp(200 + agl * 0.95, 240, 880);
+  if (Math.abs(want - shadowExtent) > 8) {
+    shadowExtent = want;
+    const c = sun.shadow.camera;
+    c.left = -want; c.right = want; c.top = want; c.bottom = -want;
+    c.updateProjectionMatrix();
+  }
+}
 // Fill from a second, dimmer angle so slopes facing away from the sun still read.
 const fill = new THREE.DirectionalLight(0xcfe6ff, 0.7);
 fill.position.set(-0.6, 0.35, -0.5).multiplyScalar(3000);
@@ -547,6 +593,7 @@ const terrain = new THREE.Mesh(
   terrainGeo,
   new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: false })
 );
+terrain.receiveShadow = true;
 scene.add(terrain);
 
 // Ocean
@@ -647,6 +694,7 @@ for (const f of airfields) {
   }));
   mesh.position.set(f.x, f.elev + 0.35, f.z);
   mesh.rotation.y = -f.heading;
+  mesh.receiveShadow = true;
   scene.add(mesh);
   f.mesh = mesh;
 }
@@ -851,6 +899,7 @@ function buildPlane() {
 }
 
 const plane = buildPlane();
+plane.traverse((o) => { if (o.isMesh) o.castShadow = true; });
 scene.add(plane);
 
 // ---------------------------------------------------------------------------
@@ -2560,6 +2609,7 @@ const liveryMaterials = LIVERIES.map(color =>
 
 function addTraffic(i) {
   const mesh = new THREE.Mesh(trafficGeo, liveryMaterials[i % liveryMaterials.length]);
+  mesh.castShadow = true;
   scene.add(mesh);
 
   const entry = {
@@ -2817,6 +2867,7 @@ function tick() {
   }
 
   updateCamera(dt, fwd, up);
+  updateSunShadow();
   sky.position.copy(camera.position);
   ocean.position.x = camera.position.x;
   ocean.position.z = camera.position.z;
