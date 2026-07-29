@@ -1284,6 +1284,59 @@ const trafficGeo = (() => {
 
 const LIVERIES = [0xf2f4f7, 0xdfe6ee, 0xc9d6e4, 0xe8d9c0, 0xd6e0d2, 0xf0e3e3];
 
+const TRAFFIC_TURN = 0.22;     // rad/s
+const TRAFFIC_BANK = 0.48;     // rad at full-rate turn
+const TRAFFIC_CLIMB = 34;      // units/s
+const WP_RADIUS = WORLD * 0.42;
+
+// A cruise waypoint somewhere over the world, comfortably clear of the ground.
+function pickWaypoint(from) {
+  const wp = new THREE.Vector3();
+  for (let i = 0; i < 12; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.random() * WP_RADIUS;
+    wp.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+    if (!from || wp.distanceTo(from) > 2200) break;
+  }
+  return wp;
+}
+
+// Highest ground anywhere along a leg. Sampling the whole leg up front is what
+// lets an aircraft start climbing kilometres before a peak it could never
+// out-climb on short-range lookahead alone.
+function legCeiling(from, to) {
+  const dx = to.x - from.x, dz = to.z - from.z;
+  const steps = THREE.MathUtils.clamp(Math.ceil(Math.hypot(dx, dz) / 250), 8, 64);
+  let max = -Infinity;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    max = Math.max(max, terrainHeight(from.x + dx * t, from.z + dz * t));
+  }
+  return max;
+}
+
+// Start a new leg. Candidate waypoints whose terrain the aircraft could not
+// climb over in the distance available are rejected, so traffic routes around
+// mountains instead of trying to fly through them.
+function newLeg(a) {
+  const from = a.mesh.position;
+  let bestWp = null, bestAlt = 0, bestSlack = -Infinity;
+
+  for (let i = 0; i < 8; i++) {
+    const wp = pickWaypoint(from);
+    const alt = Math.max(a.cruise, legCeiling(from, wp) + 330);
+    const dist = Math.hypot(wp.x - from.x, wp.z - from.z);
+    const climbable = (dist / a.speed) * TRAFFIC_CLIMB * 0.75;
+    const slack = climbable - (alt - from.y);
+
+    if (slack > bestSlack) { bestSlack = slack; bestWp = wp; bestAlt = alt; }
+    if (slack > 0) break;
+  }
+
+  a.wp = bestWp;
+  a.legAlt = bestAlt;
+}
+
 function spawnTraffic() {
   for (let i = 0; i < TRAFFIC_COUNT; i++) {
     const mesh = new THREE.Mesh(trafficGeo, new THREE.MeshStandardMaterial({
@@ -1293,29 +1346,74 @@ function spawnTraffic() {
     const a = Math.random() * Math.PI * 2;
     const r = 700 + Math.random() * 4600;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const cruise = 380 + Math.random() * 1700;
+    const cruise = 620 + Math.random() * 1700;
+
     mesh.position.set(x, Math.max(terrainHeight(x, z) + 260, cruise), z);
-    mesh.rotateY(Math.random() * Math.PI * 2);
     scene.add(mesh);
 
-    traffic.push({ mesh, speed: 70 + Math.random() * 80, cruise });
+    const entry = {
+      mesh,
+      speed: 70 + Math.random() * 80,
+      cruise,
+      yaw: Math.random() * Math.PI * 2,
+      bank: 0,
+      pitch: 0,
+      vy: 0,
+      wp: null,
+      legAlt: cruise
+    };
+    newLeg(entry);
+    traffic.push(entry);
   }
 }
 
 const tFwd = new THREE.Vector3();
-const tOut = new THREE.Vector3();
+const tEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+// Shortest signed angle from a to b.
+function angleDelta(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
 
 function updateTraffic(dt) {
   for (const a of traffic) {
-    tFwd.set(0, 0, -1).applyQuaternion(a.mesh.quaternion);
-    a.mesh.position.addScaledVector(tFwd, a.speed * dt);
+    const p = a.mesh.position;
 
-    // Turn back at the edge of the world — only when actually heading outward,
-    // so an aircraft on the boundary cannot flip-flop every frame.
-    tOut.set(a.mesh.position.x, 0, a.mesh.position.z);
-    if (tOut.length() > WORLD * 0.45 && tFwd.dot(tOut.normalize()) > 0) {
-      a.mesh.rotateY(Math.PI);
-    }
+    // ---- navigate: turn toward the waypoint at a limited rate
+    if (Math.hypot(a.wp.x - p.x, a.wp.z - p.z) < 400) newLeg(a);
+
+    const want = headingTo(p, a.wp);
+    const turn = THREE.MathUtils.clamp(angleDelta(a.yaw, want), -TRAFFIC_TURN * dt, TRAFFIC_TURN * dt);
+    a.yaw += turn;
+
+    // Bank into the turn, and roll back out as it finishes.
+    const wantBank = (turn / (TRAFFIC_TURN * dt || 1)) * TRAFFIC_BANK;
+    a.bank += (wantBank - a.bank) * (1 - Math.exp(-1.6 * dt));
+
+    // ---- hold cruise altitude, but climb over rising ground ahead
+    tFwd.set(0, 0, -1).applyEuler(tEuler.set(0, a.yaw, 0));
+    // Near-field floor is a safety net; the leg altitude does the real work.
+    const ahead = terrainHeight(p.x + tFwd.x * 1200, p.z + tFwd.z * 1200);
+    const floor = Math.max(terrainHeight(p.x, p.z), ahead, SEA_LEVEL) + 300;
+    const targetY = Math.max(a.legAlt, floor);
+
+    const wantVy = THREE.MathUtils.clamp((targetY - p.y) * 0.5, -16, TRAFFIC_CLIMB);
+    a.vy += (wantVy - a.vy) * (1 - Math.exp(-1.2 * dt));
+
+    // ---- integrate and rebuild the attitude from yaw / pitch / bank
+    p.addScaledVector(tFwd, a.speed * dt);
+    p.y += a.vy * dt;
+
+    // Last-resort clamp: routing should have avoided this, but an aircraft must
+    // never be seen inside a mountain.
+    const ground = Math.max(terrainHeight(p.x, p.z), SEA_LEVEL) + 70;
+    if (p.y < ground) { p.y = ground; a.vy = Math.max(a.vy, 0); }
+
+    a.pitch = Math.atan2(a.vy, a.speed);
+    a.mesh.quaternion.setFromEuler(tEuler.set(a.pitch, a.yaw, a.bank, 'YXZ'));
   }
 }
 
@@ -1330,7 +1428,7 @@ const clock = new THREE.Clock();
 window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
-  renderer, drawMap, cycleMapZoom, traffic,
+  renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
