@@ -25,6 +25,12 @@
   }
   #left  { left: 18px;  bottom: 18px; min-width: 190px; }
   #right { right: 18px; top: 18px; min-width: 170px; text-align: right; }
+  #misHdr {
+    display: none; font-size: 11px; letter-spacing: 1px; color: #ffcf8a;
+    padding-bottom: 7px; margin-bottom: 7px;
+    border-bottom: 1px solid rgba(140, 230, 255, .18);
+  }
+  #misHdr b { display: block; font-size: 9px; letter-spacing: 2px; opacity: .65; color: #cdf6ff; margin-top: 2px; }
   #help  { left: 18px;  top: 18px; opacity: .72; line-height: 1.65; }
 
   .row { display: flex; justify-content: space-between; gap: 14px; }
@@ -197,7 +203,8 @@
   </div>
 
   <div class="panel" id="right">
-    <div class="row"><span class="k">RINGS</span><span class="v big" id="rings">0/12</span></div>
+    <div id="misHdr"></div>
+    <div class="row"><span class="k" id="lblGates">RINGS</span><span class="v big" id="rings">0/12</span></div>
     <div class="row"><span class="k">NEXT</span><span class="v" id="next">—</span></div>
     <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
     <div class="row"><span class="k">BEST</span><span class="v" id="best">—</span></div>
@@ -1111,6 +1118,33 @@ function endMission() {
   mission.phase = 'idle';
 }
 
+const MISSION_PHASE = {
+  ready: 'LINED UP',
+  enroute: 'EN ROUTE',
+  arrival: 'INBOUND',
+  complete: 'ARRIVED'
+};
+
+const MISSION_KEY = 'skyward.bestMission';
+let bestMission = parseInt(localStorage.getItem(MISSION_KEY) || '', 10);
+if (!Number.isFinite(bestMission)) bestMission = null;
+
+function updateMission(dt) {
+  if (!mission.active) return;
+
+  // The clock starts when the wheels leave the ground, not on the runway.
+  if (mission.phase === 'ready') {
+    if (!state.onGround) {
+      mission.phase = 'enroute';
+      mission.t = 0;
+      atcToPlayer(`${PLAYER_CS}, airborne, cleared en route. First gate ahead.`);
+    }
+    return;
+  }
+
+  if (mission.phase === 'enroute' || mission.phase === 'arrival') mission.t += dt;
+}
+
 // ---------------------------------------------------------------------------
 // Flight state
 // ---------------------------------------------------------------------------
@@ -1369,6 +1403,8 @@ const el = {
   thrbar: document.getElementById('thrbar'),
   time: document.getElementById('time'),
   rings: document.getElementById('rings'),
+  misHdr: document.getElementById('misHdr'),
+  lblGates: document.getElementById('lblGates'),
   next: document.getElementById('next'),
   best: document.getElementById('best'),
   warn: document.getElementById('warn'),
@@ -2275,8 +2311,27 @@ function updateHud() {
   el.thr.textContent = Math.round(state.throttle * 100) + '%';
   el.thrbar.style.width = (state.throttle * 100) + '%';
   el.time.textContent = state.time.toFixed(1);
-  el.rings.textContent = `${nextRing}/${RING_COUNT}`;
   const ring = rings[nextRing];
+
+  if (mission.active) {
+    el.misHdr.style.display = 'block';
+    el.misHdr.innerHTML = `${mission.dest.name}<b>${MISSION_PHASE[mission.phase] || ''}</b>`;
+    el.lblGates.textContent = 'GATES';
+    el.rings.textContent = `${nextRing}/${mission.gatesTotal}`;
+    el.time.textContent = mission.t.toFixed(1);
+    el.best.textContent = bestMission === null ? '—' : String(bestMission);
+
+    // Once the gates are done, the number that matters is range to the field.
+    el.next.textContent = mission.phase === 'arrival' || courseDone
+      ? Math.round(Math.hypot(mission.dest.x - plane.position.x, mission.dest.z - plane.position.z)) + 'm'
+      : (ring ? Math.round(plane.position.distanceTo(ring.mesh.position)) + 'm' : '—');
+    return;
+  }
+
+  el.misHdr.style.display = 'none';
+  el.lblGates.textContent = 'RINGS';
+  el.rings.textContent = `${nextRing}/${RING_COUNT}`;
+  el.best.textContent = best ? best.toFixed(1) : '—';
   el.next.textContent = (ring && !courseDone)
     ? Math.round(plane.position.distanceTo(ring.mesh.position)) + 'm'
     : '—';
@@ -2522,7 +2577,9 @@ function updateGroundRoll(dt) {
 
   const braking = keys.has('Space');
   const drag = braking ? 42 : (state.throttle < 0.15 ? 14 : 5);
-  state.speed += (state.throttle * MAX_SPEED - state.speed) * 0.35 * dt - drag * dt;
+  // Accelerate far more gently than in the air, so a takeoff run actually uses
+  // a few hundred metres of strip instead of snapping to flying speed.
+  state.speed += (state.throttle * MAX_SPEED - state.speed) * 0.07 * dt - drag * dt;
   state.speed = Math.max(0, state.speed);
 
   axes();
@@ -2948,10 +3005,10 @@ window.SKYWARD = {
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
-  updateFlight, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
+  updateFlight, updateHud, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
   preferredEnd, windsocks, updateWindsocks,
-  mission, startMission, endMission, buildRouteCourse, placeOnRunway,
+  mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -2972,6 +3029,7 @@ function tick() {
     updateFlight(dt);
     updateRings(dt, t);
     updateChatter(dt);
+    updateMission(dt);
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
     if (landingPanelTimer > 0 && (landingPanelTimer -= dt) <= 0) ldEl.panel.classList.remove('on');
   } else {
