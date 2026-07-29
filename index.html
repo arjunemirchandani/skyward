@@ -312,8 +312,10 @@ function fbm(x, y, octaves) {
   return sum / norm;
 }
 
-// Signed height of the land at a world position. Negative = below sea level.
-function terrainHeight(x, z) {
+// Raw landscape, before anything is built on it. Airfield sites are chosen
+// from this, and terrainHeight() below flattens the ground under them — so the
+// mesh, collision, the minimap and traffic routing all see the same world.
+function baseTerrain(x, z) {
   const continent = fbm(x * 0.00034 + 11.3, z * 0.00034 - 4.7, 5);
   let h = (continent - 0.44) * 2400;
 
@@ -326,6 +328,102 @@ function terrainHeight(x, z) {
   h += (fbm(x * 0.0052 - 33.0, z * 0.0052 + 88.0, 3) - 0.5) * 40 * (0.35 + landMask);
 
   return Math.max(h, -160);
+}
+
+// ---------------------------------------------------------------------------
+// Airfields — sited on the raw landscape, then levelled into it
+// ---------------------------------------------------------------------------
+const AIRFIELD_COUNT = 3;
+const RUNWAY_LEN = 1100;
+const RUNWAY_WID = 60;
+const APRON = 130;          // flat ground beyond the runway edges
+const PAD_RAMP = 260;       // distance over which the pad blends into terrain
+
+// How uneven the ground is within `reach` of a point.
+function roughnessAt(x, z, reach) {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const h = baseTerrain(x + Math.cos(a) * reach, z + Math.sin(a) * reach);
+    if (h < lo) lo = h;
+    if (h > hi) hi = h;
+  }
+  return hi - lo;
+}
+
+// Run the strip along the flattest available bearing, so the pad displaces as
+// little of the landscape as possible.
+function bestRunwayHeading(x, z) {
+  let best = 0, bestSpread = Infinity;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI;
+    const dx = Math.sin(a), dz = -Math.cos(a);
+    let lo = Infinity, hi = -Infinity;
+    for (let t = -0.5; t <= 0.5; t += 0.1) {
+      const h = baseTerrain(x + dx * RUNWAY_LEN * t, z + dz * RUNWAY_LEN * t);
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    if (hi - lo < bestSpread) { bestSpread = hi - lo; best = a; }
+  }
+  return best;
+}
+
+const airfields = (() => {
+  const candidates = [];
+  const STEP = 220;
+  const LIMIT = WORLD * 0.36;
+
+  for (let x = -LIMIT; x <= LIMIT; x += STEP) {
+    for (let z = -LIMIT; z <= LIMIT; z += STEP) {
+      const h = baseTerrain(x, z);
+      if (h < 30 || h > 260) continue;                 // low coastal land only
+      const rough = roughnessAt(x, z, RUNWAY_LEN * 0.5);
+      if (rough > 190) continue;
+      candidates.push({ x, z, elev: h, rough });
+    }
+  }
+
+  candidates.sort((a, b) => a.rough - b.rough);
+
+  const chosen = [];
+  for (const c of candidates) {
+    if (chosen.length >= AIRFIELD_COUNT) break;
+    if (chosen.some(f => Math.hypot(f.x - c.x, f.z - c.z) < 3000)) continue;
+    const heading = bestRunwayHeading(c.x, c.z);
+    chosen.push({
+      x: c.x, z: c.z,
+      elev: Math.max(c.elev, 22),                      // keep the strip above the surf
+      heading,
+      sin: Math.sin(heading), cos: Math.cos(heading),
+      name: null                                       // named once the islands are
+    });
+  }
+  return chosen;
+})();
+
+function smoothstep(t) { return t * t * (3 - 2 * t); }
+
+// Ground height with airfield pads levelled in.
+function terrainHeight(x, z) {
+  let h = baseTerrain(x, z);
+
+  for (const f of airfields) {
+    const dx = x - f.x, dz = z - f.z;
+    // Runway-local: u along the strip, v across it.
+    const u = dx * f.sin - dz * f.cos;
+    const v = dx * f.cos + dz * f.sin;
+
+    const outU = Math.max(0, Math.abs(u) - RUNWAY_LEN / 2 - APRON) / PAD_RAMP;
+    const outV = Math.max(0, Math.abs(v) - RUNWAY_WID / 2 - APRON) / PAD_RAMP;
+    const d = Math.hypot(outU, outV);
+    if (d >= 1) continue;
+
+    const w = 1 - smoothstep(d);
+    h = h * (1 - w) + f.elev * w;
+  }
+
+  return h;
 }
 
 const SAND = new THREE.Color(0xd9c89a);
@@ -1260,6 +1358,29 @@ const reportingPoints = (() => {
   });
 })();
 
+// Runway designators come from the magnetic-style heading: 090 -> "09".
+function runwayNumber(headingRad) {
+  const deg = (THREE.MathUtils.radToDeg(headingRad) + 360) % 360;
+  const n = Math.round(deg / 10);
+  return String(n === 0 ? 36 : n).padStart(2, '0');
+}
+
+// Airfields borrow the name of whatever island they were sited on, so ATC and
+// the map agree with the chatter.
+(() => {
+  for (const f of airfields) {
+    let best = null, bestD = Infinity;
+    for (const p of reportingPoints) {
+      const d = Math.hypot(p.x - f.x, p.z - f.z);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    const stem = best ? best.name.split(' ')[0] : 'SKYWARD';
+    f.name = `${stem} FIELD`;
+    f.rwy = runwayNumber(f.heading);
+    f.rwyReciprocal = runwayNumber(f.heading + Math.PI);
+  }
+})();
+
 const MILE = 1000;   // world units per radio "mile"
 const CARDINALS = ['NORTH', 'NORTHEAST', 'EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST'];
 
@@ -1906,6 +2027,7 @@ window.SKYWARD = {
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition,
+  airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
