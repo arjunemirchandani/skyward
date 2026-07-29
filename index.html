@@ -708,6 +708,31 @@ function updateWind(t) {
 }
 updateWind(0);
 
+// Air is roughest low down, over broken ground, when it is blowing hard.
+// Deliberately eased off in the last few metres: mechanical turbulence really
+// is worst near the surface, but making the flare a lottery is not fun.
+let turbLevel = 0;
+
+function turbulence(dt, t, agl, roughBelow) {
+  const strength = Math.min(1, wind.speed / 18);
+  const low = Math.max(0, Math.min(1, 1 - agl / 900));
+  const flare = 0.3 + 0.7 * Math.min(1, agl / 60);
+  turbLevel = strength * (0.18 + low * roughBelow * 0.95) * flare;
+  if (turbLevel < 0.001) return 0;
+
+  // Smooth noise per axis, so it reads as air rather than vibration. Scaled so
+  // the worst air disturbs roll at about 20 deg/s against the player's 106 —
+  // felt, but always outflyable.
+  const p = turbLevel * 0.22;
+  plane.rotateX((noise2(t * 1.6, 4.1) - 0.5) * p * dt * 2);
+  // Roll is deliberately the mildest axis: the wings self-level at up to about
+  // 90 deg/s, but only while upright, so a sustained roll push could otherwise
+  // tip an unattended aircraft past the point where that recovery works.
+  plane.rotateZ((noise2(t * 1.9, 8.3) - 0.5) * p * dt * 1.5);
+  plane.rotateY((noise2(t * 1.1, 2.7) - 0.5) * p * dt * 1.2);
+  return (noise2(t * 1.4, 12.9) - 0.5) * turbLevel * 24;   // vertical gust
+}
+
 function windCompass() {
   return String(Math.round(((THREE.MathUtils.radToDeg(wind.from) % 360) + 360) % 360)).padStart(3, '0');
 }
@@ -1965,11 +1990,18 @@ function updateFlight(dt) {
     warning = 'TERRAIN';
   }
 
+  // ---- turbulence
+  const aglNow = plane.position.y - Math.max(terrainHeight(plane.position.x, plane.position.z), SEA_LEVEL);
+  const roughBelow = Math.min(1, roughnessAt(plane.position.x, plane.position.z, 400) / 600);
+  const vGust = turbulence(dt, clock.elapsedTime, aglNow, roughBelow);
+  axes();
+
   // ---- integrate
   // state.speed is airspeed; the ground track is that plus whatever the air
   // itself is doing, which is where drift on approach comes from.
   prevPos.copy(plane.position);
-  state.vel.copy(fwd).multiplyScalar(state.speed).addScaledVector(WORLD_UP, -sink).add(wind.vec);
+  state.vel.copy(fwd).multiplyScalar(state.speed)
+    .addScaledVector(WORLD_UP, -sink + vGust).add(wind.vec);
   plane.position.addScaledVector(state.vel, dt);
   checkRing();
 
@@ -2681,6 +2713,7 @@ window.SKYWARD = {
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
+  get turbLevel() { return turbLevel; },
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
