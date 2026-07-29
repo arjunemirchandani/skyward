@@ -2266,7 +2266,7 @@ function overrun() {
 // ---------------------------------------------------------------------------
 // Traffic aircraft
 // ---------------------------------------------------------------------------
-const TRAFFIC_COUNT = 14;
+let TRAFFIC_COUNT = 46;
 const traffic = [];
 
 // One merged geometry for the whole airframe, so each aircraft is a single
@@ -2373,9 +2373,11 @@ function newLeg(a) {
 // Traffic is streamed around the player: anything that falls too far behind is
 // recycled to a fresh position ahead of them, so the sky is populated wherever
 // you fly without simulating aircraft across the whole world.
-const TRAFFIC_FAR = 9000;
-const TRAFFIC_NEAR_SPAWN = 3200;
-const TRAFFIC_FAR_SPAWN = 6200;
+// Recycling far out and respawning close in is what decides how often you
+// actually meet anyone: at 4 km an aircraft is under two pixels across.
+const TRAFFIC_FAR = 7600;
+const TRAFFIC_NEAR_SPAWN = 2200;
+const TRAFFIC_FAR_SPAWN = 5600;
 
 function placeTraffic(a) {
   const r = TRAFFIC_NEAR_SPAWN + Math.random() * (TRAFFIC_FAR_SPAWN - TRAFFIC_NEAR_SPAWN);
@@ -2403,21 +2405,40 @@ function placeTraffic(a) {
   newLeg(a);
 }
 
-function spawnTraffic() {
-  for (let i = 0; i < TRAFFIC_COUNT; i++) {
-    const mesh = new THREE.Mesh(trafficGeo, new THREE.MeshStandardMaterial({
-      color: LIVERIES[i % LIVERIES.length], roughness: 0.5, metalness: 0.25
-    }));
-    scene.add(mesh);
+// One material per livery, shared by every aircraft wearing it, so fleet size
+// costs draw calls in proportion to liveries rather than to aircraft.
+const liveryMaterials = LIVERIES.map(color =>
+  new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.25 }));
 
-    const entry = {
-      mesh, speed: 100, cruise: 900, yaw: 0,
-      bank: 0, pitch: 0, vy: 0, wp: null, legAlt: 900,
-      callsign: makeCallsign(i)
-    };
-    placeTraffic(entry);
-    traffic.push(entry);
+function addTraffic(i) {
+  const mesh = new THREE.Mesh(trafficGeo, liveryMaterials[i % liveryMaterials.length]);
+  scene.add(mesh);
+
+  const entry = {
+    mesh, speed: 100, cruise: 900, yaw: 0,
+    bank: 0, pitch: 0, vy: 0, wp: null, legAlt: 900,
+    callsign: makeCallsign(i)
+  };
+  placeTraffic(entry);
+  traffic.push(entry);
+  return entry;
+}
+
+function spawnTraffic() {
+  for (let i = 0; i < TRAFFIC_COUNT; i++) addTraffic(i);
+}
+
+// Adjustable at runtime so fleet size can be measured, and tuned per machine.
+function setTrafficCount(n) {
+  n = Math.max(0, Math.round(n));
+  while (traffic.length > n) {
+    const a = traffic.pop();
+    scene.remove(a.mesh);
+    if (a.glint) scene.remove(a.glint);
   }
+  while (traffic.length < n) addTraffic(traffic.length);
+  TRAFFIC_COUNT = n;
+  return traffic.length;
 }
 
 // ---- proximity alerting
@@ -2513,7 +2534,7 @@ window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
-  radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition,
+  radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, approachInfo, updateApproach,
   get mapZoom() { return mapZoom; },
