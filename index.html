@@ -72,6 +72,7 @@
     margin: -3.5px 0 0 -3.5px; border: 1px solid rgba(205,246,255,.9); border-radius: 50%;
   }
   #ils .ft { margin-top: 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #ils .xw { margin-top: 3px; font-size: 10px; letter-spacing: 1px; color: #ffcf8a; opacity: .85; }
 
   #radio {
     position: absolute; left: 18px; top: 200px; width: 340px;
@@ -210,6 +211,7 @@
       <u></u>
     </div>
     <div class="ft"><span id="ilsDist">—</span></div>
+    <div class="xw"><span id="ilsXw">—</span></div>
   </div>
 
   <div id="radio"></div>
@@ -647,6 +649,49 @@ for (const f of airfields) {
   mesh.rotation.y = -f.heading;
   scene.add(mesh);
   f.mesh = mesh;
+}
+
+// A windsock beside each strip: swings to point downwind and lifts toward
+// horizontal as the wind gets up, exactly like the real thing.
+const windsocks = [];
+{
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.6, metalness: 0.3 });
+  const sockMat = new THREE.MeshStandardMaterial({
+    color: 0xff7a2f, roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide
+  });
+
+  for (const f of airfields) {
+    const g = new THREE.Group();
+
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 15, 6), poleMat);
+    pole.position.y = 7.5;
+    g.add(pole);
+
+    // Cone laid along -Z: wide mouth at the mast, taper trailing downwind.
+    const pivot = new THREE.Group();
+    pivot.position.y = 14.6;
+    const sock = new THREE.Mesh(new THREE.ConeGeometry(2.1, 9, 10, 1, true), sockMat);
+    sock.rotation.x = -Math.PI / 2;
+    sock.position.z = -4.5;
+    pivot.add(sock);
+    g.add(pivot);
+
+    // Beside the strip, near the midpoint.
+    const off = RUNWAY_WID / 2 + 26;
+    g.position.set(f.x + f.cos * off, f.elev, f.z + f.sin * off);
+    scene.add(g);
+    windsocks.push({ group: g, pivot });
+  }
+}
+
+function updateWindsocks() {
+  // Point the mast so its -Z runs downwind, then droop the sock by strength.
+  const yaw = Math.atan2(-wind.vec.x, -wind.vec.z);
+  const droop = (1 - Math.min(1, wind.speed / 14)) * 1.05;
+  for (const w of windsocks) {
+    w.group.rotation.y = yaw;
+    w.pivot.rotation.x = droop;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2164,11 +2209,25 @@ function approachInfo() {
   const pathDeg = THREE.MathUtils.radToDeg(Math.atan2(plane.position.y - f.elev, reach));
   const gsDeg = pathDeg - THREE.MathUtils.radToDeg(GLIDESLOPE);
 
+  // Wind resolved into the runway's own frame: headwind along it, crosswind
+  // across it. This is what tells you how much to crab.
+  const alongX = f.sin * dir, alongZ = -f.cos * dir;
+  const rightX = f.cos * dir, rightZ = f.sin * dir;
+  const headwind = -(wind.vec.x * alongX + wind.vec.z * alongZ);
+  const crosswind = wind.vec.x * rightX + wind.vec.z * rightZ;
+
   return {
     field: f, rwy: dir > 0 ? f.rwy : f.rwyReciprocal,
-    toThreshold, locDeg, gsDeg,
+    toThreshold, locDeg, gsDeg, headwind, crosswind,
     aligned: Math.abs(locDeg) < LOC_FULL && toThreshold > 0
   };
+}
+
+// The end of the strip with the most headwind — the one you want.
+function preferredEnd(f) {
+  const along = new THREE.Vector3(f.sin, 0, -f.cos);
+  const head = -(wind.vec.x * along.x + wind.vec.z * along.z);
+  return head >= 0 ? f.rwy : f.rwyReciprocal;
 }
 
 const ilsEl = {
@@ -2177,7 +2236,8 @@ const ilsEl = {
   rwy: document.getElementById('ilsRwy'),
   loc: document.getElementById('ilsLoc'),
   gs: document.getElementById('ilsGs'),
-  dist: document.getElementById('ilsDist')
+  dist: document.getElementById('ilsDist'),
+  xw: document.getElementById('ilsXw')
 };
 
 function updateApproach() {
@@ -2200,10 +2260,21 @@ function updateApproach() {
   const off = Math.abs(a.locDeg) > LOC_FULL * 0.6 || Math.abs(a.gsDeg) > GS_FULL * 0.6;
   ilsEl.loc.style.background = ilsEl.gs.style.background = off ? '#ffb35a' : '#8affc1';
 
+  // Crosswind is what you actually have to fly, so show it plainly: which side
+  // it comes from, and whether you are landing into wind or downwind.
+  const xw = Math.round(Math.abs(a.crosswind));
+  const side = a.crosswind > 0 ? 'L' : 'R';     // pushing you right means it comes from the left
+  const hw = Math.round(a.headwind);
+  ilsEl.xw.textContent = xw >= 1
+    ? `X-WIND ${side} ${xw} · ${hw >= 0 ? 'HW' : 'TW'} ${Math.abs(hw)}`
+    : `${hw >= 0 ? 'HW' : 'TW'} ${Math.abs(hw)}`;
+
   // Clearance, once you are actually established on final.
   if (a.aligned && a.toThreshold < 4000 && Math.abs(a.gsDeg) < GS_FULL) {
+    const better = preferredEnd(a.field);
+    const note = better !== a.rwy ? ` Wind favours runway ${better}.` : '';
     atcAdvise(`land-${a.field.name}-${a.rwy}`,
-      `${PLAYER_CS}, ${a.field.name}, cleared to land runway ${a.rwy}.`, 40);
+      `${PLAYER_CS}, ${a.field.name}, wind ${windCompass()} at ${Math.round(wind.speed)}, cleared to land runway ${a.rwy}.${note}`, 40);
   }
 }
 
@@ -2714,6 +2785,7 @@ window.SKYWARD = {
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
+  preferredEnd, windsocks, updateWindsocks,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -2726,6 +2798,7 @@ function tick() {
 
   const t = clock.elapsedTime;
   updateWind(t);
+  updateWindsocks();
   updateTraffic(dt);
 
   if (state.started) {
