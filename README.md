@@ -22,12 +22,31 @@ Then open http://localhost:8123.
 | `↑` / `↓` | Throttle |
 | `C` | Chase / cockpit camera |
 | `R` | Respawn |
-| `N` | New course |
+| `B` | New mission |
+| `N` | Free gate course |
 | `M` | Mute |
 | `Z` | Minimap zoom (2.5 / 5 / 10 km) |
 | `SPACE` | Wheel brakes (on the ground) |
 
 ## The game
+
+### Missions
+
+Press `B`. You are put on the runway at one field, lined up on the into-wind end, engine idling. Take off, fly the gate course — which is laid along the route to another field, so flying it takes you there — and land at the far end. One score out of 100, balanced three ways:
+
+| | |
+| --- | --- |
+| Gates flown | 40 |
+| Touchdown grade | 40 |
+| Time against a par for the route | 20 |
+
+Skipping gates to get down sooner is a legitimate choice, not an exploit: you can go straight to the destination and still complete the mission, but the gates you dropped cost more than the time they saved. Landing at the wrong field is just a landing, and Center will remind you where you were meant to be going.
+
+### Free flight
+
+Press `N` for the original 12-gate course from wherever you happen to be, with no field to land at and your best time kept separately. Nothing about missions takes that away.
+
+### The gate course
 
 Fly through all 12 gold rings in order, as fast as you can. The next ring is gold and pulsing; the others are cyan. An on-screen marker tracks the active ring and pins itself to the screen edge when it is behind you. Your best time is kept in `localStorage`. Finishing generates a fresh course.
 
@@ -52,6 +71,7 @@ They are all on the radio, and so are you — your callsign is `REDTAIL ONE`. Sk
 - **Ring detection** — each frame the previous and current positions are transformed into ring-local space; a sign change in local `z` plus a radial hit inside the torus radius counts as a pass. Frame-rate independent, no tunnelling.
 - **Minimap** — the whole world is baked once into a 320×320 offscreen canvas: land colours from the same palette as the 3D terrain, depth-shaded ocean, and a hillshade computed from central differences on the height grid (no extra noise sampling). Each frame the map blits a player-centred, north-up window out of that bake and overlays the ring course. `drawImage` clips a source rectangle that runs off the bake, so the destination rectangle is clipped to match — otherwise the map would smear near the world edge.
 - **Traffic** — each aircraft is one merged geometry (a single draw call) flown by a waypoint autopilot: limited turn rate, bank proportional to turn rate, pitch derived from climb rate. The interesting part is altitude. Short-range lookahead cannot save an aircraft from a 1500 m peak — by the time the peak is in range there is no distance left to climb. So the *whole leg* is sampled when a waypoint is chosen, candidate legs whose terrain the aircraft could not out-climb are rejected outright, and a hard floor clamp guarantees nothing is ever seen inside a mountain. Over ten simulated minutes the clamp engages on 0.016% of samples; routing does the rest. Traffic streams around the player — anything beyond 9 km is recycled to a fresh bearing 3.2–6.2 km away, chosen by retrying bearings rather than clamping to the world bounds, since clamping drags the spawn point toward the player and pops an aircraft in at close range.
+- **Missions** — the spine that ties the rest together. Before this, gates and landings were two unrelated activities; you never flew gates *to* anywhere. A mission is a phase machine (`ready → enroute → arrival → complete`) over the systems that already existed, and the only genuinely new piece is `buildRouteCourse`, which lays gates along the track between two fields — swinging either side of the direct line — instead of wandering at random. Because they are placed along the route, flying the gates *is* the navigation. The clock starts when the wheels leave the ground, not on the runway. Respawning mid-mission puts you back on approach to whatever you were heading for: the next gate during the gate phase, the destination field once they are done.
 - **Airfields** — there is no flat ground in a noise heightfield, so the terrain is made flat where it needs to be. `baseTerrain` is the raw landscape; sites are chosen from it by scanning for low, even coastal ground and orienting each strip along its flattest bearing. `terrainHeight` then blends those pads into the landscape with a smoothstep ramp. Because every system — the mesh, collision, the minimap bake, island finding, traffic routing — reads `terrainHeight`, levelling the ground in one function is enough to make the whole world agree; the strips measure dead flat and traffic still clears the terrain everywhere. Runway markings are painted into a canvas in runway-local units, with each designator placed at the threshold a pilot crosses when landing on it.
 - **Seeing the traffic** — "I never see anyone" turned out to be a visibility problem, not a count problem. Measured against the actual projection, aircraft sat 2.2–7.1 km away and rendered 1.2 to 3.8 pixels across; at 7 km an airframe covered **zero** visible pixels once antialiasing was done with it. Three changes fixed it: a larger fleet on a tighter respawn ring, respawns weighted toward the arc the player is flying into and toward their altitude band, and a distance glint — a point sprite per aircraft that fades in exactly as the mesh becomes sub-pixel and out again with the fog, all in a single draw call. Density is cheap: the whole frame, 46 aircraft included, costs 0.37 ms, and 250 aircraft measured 3.5% of a 60 fps budget. Draw calls barely move with fleet size, because off-screen aircraft are frustum-culled and liveries share materials.
 - **Conflict alerting** — a busy sky broke the traffic warning: on pure proximity it was lit 52% of the time, which is the same as not having it. A contact is now a threat only if it is close, within 200 m vertically, *and* the relative velocity says it is closing. That put the alert back to about 11% of flight time, where it means something again.
