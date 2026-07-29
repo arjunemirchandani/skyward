@@ -716,6 +716,31 @@ function chime(n) {
   tone(base * 1.5, 0.3, 0.16, 'sine', 0.07);
 }
 
+// A keyed microphone: short burst of bandpassed static. Ground stations sit
+// lower and warmer than the aircraft so the two are tellable apart by ear.
+function squelch(isAtc) {
+  if (!audio || muted || !noiseBuf) return;
+  const t0 = audio.currentTime;
+
+  const src = audio.createBufferSource();
+  src.buffer = noiseBuf;
+  src.playbackRate.value = isAtc ? 0.85 : 1.2;
+
+  const bp = audio.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = isAtc ? 1050 : 1650;
+  bp.Q.value = 1.1;
+
+  const g = audio.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(isAtc ? 0.12 : 0.15, t0 + 0.014);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.16);
+
+  src.connect(bp); bp.connect(g); g.connect(master);
+  src.start(t0, Math.random() * 0.6);
+  src.stop(t0 + 0.22);
+}
+
 function boom() {
   if (!audio || muted || !noiseBuf) return;
   const t0 = audio.currentTime;
@@ -911,6 +936,7 @@ function radio(from, text, isAtc) {
   div.addEventListener('animationend', () => div.remove());
   radioEl.appendChild(div);
   while (radioEl.children.length > RADIO_MAX) radioEl.firstChild.remove();
+  squelch(isAtc);
 }
 
 // Altitudes read as feet on the radio even though the sim works in its own
