@@ -161,7 +161,8 @@
     &uarr; / &darr; &nbsp; throttle<br>
     C camera &nbsp;&middot;&nbsp; R respawn<br>
     N new course &nbsp;&middot;&nbsp; M mute<br>
-    Z &nbsp; map zoom
+    Z &nbsp; map zoom<br>
+    SPACE &nbsp; brakes (on ground)
   </div>
 
   <div class="panel" id="left">
@@ -218,6 +219,7 @@
       <tr><td>R</td><td>respawn</td></tr>
       <tr><td>N / M</td><td>new course / mute</td></tr>
       <tr><td>Z</td><td>minimap zoom</td></tr>
+      <tr><td>SPACE</td><td>wheel brakes on the ground</td></tr>
     </table>
     <div class="sub" style="letter-spacing:2px;margin-bottom:18px">FLY THROUGH ALL 12 GOLD RINGS &mdash; BEAT YOUR TIME</div>
     <div class="go">PRESS ANY KEY TO FLY</div>
@@ -839,7 +841,9 @@ const state = {
   crashed: false,
   crashT: 0,
   onGround: false,
+  stopped: false,
   landingScore: 0,
+  tdPoint: null,
   time: 0,
   started: false
 };
@@ -2071,7 +2075,9 @@ function showLanding(v) {
 
 function touchDown(r, v) {
   state.onGround = true;
+  state.stopped = false;
   state.landingScore = v.score;
+  state.tdPoint = plane.position.clone();
 
   // Settle onto the surface rather than through it.
   plane.position.y = r.f.elev + 1.2;
@@ -2086,13 +2092,20 @@ function touchDown(r, v) {
   atcToPlayer(`${PLAYER_CS}, ${r.f.name}, roger, down runway ${v.rwy}. ${remark}`);
 }
 
-// Rolling on the strip: hold the wheels on the surface, bleed off speed, and
-// let the player fly again once there is enough airspeed.
+// Rolling on the strip: steer with the pedals, brake, and rotate off again once
+// there is enough speed to fly.
 function updateGroundRoll(dt) {
   const r = runwayAt(plane.position);
-  if (!r) { crash(); return; }          // ran off the side or the end
+  if (!r) { overrun(); return; }        // ran off the side or the end
 
-  // Level the attitude out as the aircraft settles.
+  const held = (c) => keys.has(c) ? 1 : 0;
+
+  // Nosewheel steering — no authority at a standstill, plenty at speed.
+  const steer = (held('KeyA') + held('KeyQ')) - (held('KeyD') + held('KeyE'));
+  const steerAuth = Math.min(1, state.speed / 55);
+  plane.rotateOnWorldAxis(WORLD_UP, steer * 0.85 * steerAuth * dt);
+
+  // Wings and nose settle level on the gear.
   const k = 1 - Math.exp(-4 * dt);
   const e = new THREE.Euler().setFromQuaternion(plane.quaternion, 'YXZ');
   e.x += (0 - e.x) * k;
@@ -2102,9 +2115,9 @@ function updateGroundRoll(dt) {
   if (keys.has('ArrowUp'))   state.throttle = Math.min(1, state.throttle + 0.55 * dt);
   if (keys.has('ArrowDown')) state.throttle = Math.max(0, state.throttle - 0.55 * dt);
 
-  const target = state.throttle * MAX_SPEED;
-  const drag = state.throttle < 0.15 ? 26 : 8;      // wheels and idle drag
-  state.speed += (target - state.speed) * 0.35 * dt - drag * dt;
+  const braking = keys.has('Space');
+  const drag = braking ? 42 : (state.throttle < 0.15 ? 14 : 5);
+  state.speed += (state.throttle * MAX_SPEED - state.speed) * 0.35 * dt - drag * dt;
   state.speed = Math.max(0, state.speed);
 
   axes();
@@ -2112,11 +2125,35 @@ function updateGroundRoll(dt) {
   plane.position.y = r.f.elev + 1.2;
   state.vel.set(fwd.x * state.speed, 0, fwd.z * state.speed);
 
-  if (state.speed > TAKEOFF_SPEED && state.throttle > 0.5) {
-    state.onGround = false;            // flying again
+  // Rotate: the player has to pull back, it does not happen on its own.
+  if (state.speed > TAKEOFF_SPEED && held('KeyS')) {
+    state.onGround = false;
+    state.stopped = false;
+    plane.rotateX(0.14);
+    plane.position.y += 0.6;
+    setWarn('');
+    return;
   }
 
+  if (state.speed < 2 && !state.stopped) fullStop();
+  if (state.speed > 12) state.stopped = false;
+
+  setWarn(braking ? 'BRAKES' : '');
   plane.userData.prop.rotation.z += (6 + state.throttle * 46) * dt;
+}
+
+function fullStop() {
+  state.stopped = true;
+  const roll = state.tdPoint ? plane.position.distanceTo(state.tdPoint) : 0;
+  setBanner(`<b>FULL STOP</b>${Math.round(roll)} m ROLLOUT &middot; SCORE ${state.landingScore}`, 4.5);
+  atcToPlayer(`${PLAYER_CS}, taxi to the ramp. ${Math.round(roll)} metre rollout.`);
+}
+
+// Leaving the paved surface while still rolling is an excursion, not a landing.
+function overrun() {
+  atcToPlayer(`${PLAYER_CS}, you have departed the runway surface.`);
+  state.onGround = false;
+  crash();
 }
 
 // ---------------------------------------------------------------------------
