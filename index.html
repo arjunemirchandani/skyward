@@ -1337,32 +1337,51 @@ function newLeg(a) {
   a.legAlt = bestAlt;
 }
 
+// Traffic is streamed around the player: anything that falls too far behind is
+// recycled to a fresh position ahead of them, so the sky is populated wherever
+// you fly without simulating aircraft across the whole world.
+const TRAFFIC_FAR = 9000;
+const TRAFFIC_NEAR_SPAWN = 3200;
+const TRAFFIC_FAR_SPAWN = 6200;
+
+function placeTraffic(a) {
+  const r = TRAFFIC_NEAR_SPAWN + Math.random() * (TRAFFIC_FAR_SPAWN - TRAFFIC_NEAR_SPAWN);
+  const lim = WORLD * 0.46;
+
+  // Try bearings until one lands inside the world. Clamping instead would drag
+  // the spawn point toward the player and pop an aircraft in at close range.
+  let x = 0, z = 0;
+  const toCentre = Math.atan2(-plane.position.z, -plane.position.x);
+  for (let i = 0; i < 12; i++) {
+    const ang = i === 11 ? toCentre : Math.random() * Math.PI * 2;
+    x = plane.position.x + Math.cos(ang) * r;
+    z = plane.position.z + Math.sin(ang) * r;
+    if (Math.abs(x) <= lim && Math.abs(z) <= lim) break;
+    if (i === 11) { x = THREE.MathUtils.clamp(x, -lim, lim); z = THREE.MathUtils.clamp(z, -lim, lim); }
+  }
+
+  a.speed = 70 + Math.random() * 80;
+  a.cruise = 620 + Math.random() * 1700;
+  a.mesh.position.set(x, Math.max(terrainHeight(x, z) + 300, a.cruise), z);
+  a.yaw = Math.random() * Math.PI * 2;
+  a.bank = 0;
+  a.pitch = 0;
+  a.vy = 0;
+  newLeg(a);
+}
+
 function spawnTraffic() {
   for (let i = 0; i < TRAFFIC_COUNT; i++) {
     const mesh = new THREE.Mesh(trafficGeo, new THREE.MeshStandardMaterial({
       color: LIVERIES[i % LIVERIES.length], roughness: 0.5, metalness: 0.25
     }));
-
-    const a = Math.random() * Math.PI * 2;
-    const r = 700 + Math.random() * 4600;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const cruise = 620 + Math.random() * 1700;
-
-    mesh.position.set(x, Math.max(terrainHeight(x, z) + 260, cruise), z);
     scene.add(mesh);
 
     const entry = {
-      mesh,
-      speed: 70 + Math.random() * 80,
-      cruise,
-      yaw: Math.random() * Math.PI * 2,
-      bank: 0,
-      pitch: 0,
-      vy: 0,
-      wp: null,
-      legAlt: cruise
+      mesh, speed: 100, cruise: 900, yaw: 0,
+      bank: 0, pitch: 0, vy: 0, wp: null, legAlt: 900
     };
-    newLeg(entry);
+    placeTraffic(entry);
     traffic.push(entry);
   }
 }
@@ -1411,6 +1430,11 @@ function updateTraffic(dt) {
     // never be seen inside a mountain.
     const ground = Math.max(terrainHeight(p.x, p.z), SEA_LEVEL) + 70;
     if (p.y < ground) { p.y = ground; a.vy = Math.max(a.vy, 0); }
+
+    // ---- recycle anything the player has left far behind
+    if (Math.hypot(p.x - plane.position.x, p.z - plane.position.z) > TRAFFIC_FAR) {
+      placeTraffic(a);
+    }
 
     a.pitch = Math.atan2(a.vy, a.speed);
     a.mesh.quaternion.setFromEuler(tEuler.set(a.pitch, a.yaw, a.bank, 'YXZ'));
