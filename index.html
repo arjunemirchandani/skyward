@@ -932,27 +932,29 @@ function emitChatter() {
   const a = traffic[Math.floor(Math.random() * traffic.length)];
   const cs = a.callsign;
 
-  let said;
-  if (a.vy > 6) said = `climbing ${feet(a.legAlt)}.`;
-  else if (a.vy < -6) said = `descending ${feet(a.legAlt)}.`;
-  else {
-    said = [
-      `level ${feet(a.mesh.position.y)}.`,
-      `level ${feet(a.mesh.position.y)}, heading ${compass(a.yaw)}.`,
-      `with you, ${feet(a.mesh.position.y)}.`
-    ][Math.floor(Math.random() * 3)];
+  const here = positionPhrase(a.mesh.position.x, a.mesh.position.z);
+  const bound = a.wp ? nearestPoint(a.wp.x, a.wp.z) : null;
+  const dest = bound ? bound.point.name : null;
+
+  const lines = [];
+  if (a.vy > 6) lines.push(`climbing ${feet(a.legAlt)}.`);
+  else if (a.vy < -6) lines.push(`descending ${feet(a.legAlt)}.`);
+  else lines.push(`level ${feet(a.mesh.position.y)}.`);
+
+  if (here) {
+    lines.push(`${here}, ${feet(a.mesh.position.y)}.`);
+    lines.push(`${here}, level ${feet(a.mesh.position.y)}, heading ${compass(a.yaw)}.`);
   }
+  if (dest) lines.push(`${feet(a.mesh.position.y)}, direct ${dest}.`);
 
-  radio(cs, said, false);
+  radio(cs, lines[Math.floor(Math.random() * lines.length)], false);
 
-  if (Math.random() < 0.55) {
-    const reply = [
-      `${cs}, roger.`,
-      `${cs}, radar contact.`,
-      `${cs}, maintain ${feet(a.legAlt)}.`,
-      `${cs}, altimeter two niner niner two.`
-    ][Math.floor(Math.random() * 4)];
-    setTimeout(() => radio(STATION, reply, true), 900 + Math.random() * 700);
+  if (Math.random() < 0.6) {
+    const replies = [`${cs}, roger.`, `${cs}, radar contact.`, `${cs}, altimeter two niner niner two.`];
+    if (dest) replies.push(`${cs}, cleared direct ${dest}.`);
+    if (here) replies.push(`${cs}, report ${nearestPoint(a.mesh.position.x, a.mesh.position.z).point.name}.`);
+    replies.push(`${cs}, maintain ${feet(a.legAlt)}.`);
+    setTimeout(() => radio(STATION, replies[Math.floor(Math.random() * replies.length)], true), 900 + Math.random() * 700);
   }
 }
 
@@ -994,21 +996,32 @@ function cycleMapZoom() {
 // same palette as the terrain mesh, depth-shaded ocean, and a hillshade pass so
 // ridges and valleys read at a glance.
 const MAP_BAKE = 320;
+const MAP_STEP = WORLD / MAP_BAKE;
+
+// Height grid for the whole world. The relief bake and the island finder both
+// read it, so the terrain is only sampled once.
+const mapHeights = (() => {
+  const N = MAP_BAKE;
+  const h = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    const z = -WORLD / 2 + (j + 0.5) * MAP_STEP;
+    for (let i = 0; i < N; i++) {
+      h[j * N + i] = terrainHeight(-WORLD / 2 + (i + 0.5) * MAP_STEP, z);
+    }
+  }
+  return h;
+})();
+
+function gridToWorld(i) { return -WORLD / 2 + (i + 0.5) * MAP_STEP; }
+
 const bakedMap = (() => {
   const N = MAP_BAKE;
   const cv = document.createElement('canvas');
   cv.width = cv.height = N;
   const g = cv.getContext('2d');
   const img = g.createImageData(N, N);
-  const step = WORLD / N;
-
-  const heights = new Float32Array(N * N);
-  for (let j = 0; j < N; j++) {
-    const z = -WORLD / 2 + (j + 0.5) * step;
-    for (let i = 0; i < N; i++) {
-      heights[j * N + i] = terrainHeight(-WORLD / 2 + (i + 0.5) * step, z);
-    }
-  }
+  const step = MAP_STEP;
+  const heights = mapHeights;
 
   const SHALLOW = new THREE.Color(0x6ab4d8);
   const DEEP = new THREE.Color(0x16405f);
@@ -1045,6 +1058,103 @@ const bakedMap = (() => {
 
 // World position -> pixel in the baked map.
 function bakePx(v) { return (v + WORLD / 2) / WORLD * MAP_BAKE; }
+
+// ---------------------------------------------------------------------------
+// Reporting points — the islands, found and named
+// ---------------------------------------------------------------------------
+const LAND_MIN = 25;        // height that counts as land rather than beach
+const MIN_ISLAND = 40;      // grid cells; smaller blobs are not worth naming
+const MAX_POINTS = 12;
+
+const NAME_STEMS = [
+  'MARROW', 'BRINE', 'ASHEN', 'TEMPEST', 'GANNET', 'SABLE', 'CINDER',
+  'VESPER', 'THORN', 'HARROW', 'MERROW', 'DRIFT', 'LUMEN', 'FALLOW'
+];
+
+// Flood fill the height grid to find connected land masses.
+function findLandmasses() {
+  const N = MAP_BAKE;
+  const seen = new Uint8Array(N * N);
+  const stack = [];
+  const regions = [];
+
+  for (let start = 0; start < N * N; start++) {
+    if (seen[start] || mapHeights[start] <= LAND_MIN) continue;
+
+    let area = 0, sumX = 0, sumZ = 0, peak = -Infinity, peakX = 0, peakZ = 0;
+    seen[start] = 1;
+    stack.push(start);
+
+    while (stack.length) {
+      const k = stack.pop();
+      const i = k % N, j = (k - i) / N;
+      const h = mapHeights[k];
+      const wx = gridToWorld(i), wz = gridToWorld(j);
+
+      area++;
+      sumX += wx; sumZ += wz;
+      if (h > peak) { peak = h; peakX = wx; peakZ = wz; }
+
+      if (i > 0)     { const n = k - 1; if (!seen[n] && mapHeights[n] > LAND_MIN) { seen[n] = 1; stack.push(n); } }
+      if (i < N - 1) { const n = k + 1; if (!seen[n] && mapHeights[n] > LAND_MIN) { seen[n] = 1; stack.push(n); } }
+      if (j > 0)     { const n = k - N; if (!seen[n] && mapHeights[n] > LAND_MIN) { seen[n] = 1; stack.push(n); } }
+      if (j < N - 1) { const n = k + N; if (!seen[n] && mapHeights[n] > LAND_MIN) { seen[n] = 1; stack.push(n); } }
+    }
+
+    if (area >= MIN_ISLAND) {
+      // A concave island can have its centroid out at sea; fall back to the summit.
+      let x = sumX / area, z = sumZ / area;
+      if (terrainHeight(x, z) < LAND_MIN) { x = peakX; z = peakZ; }
+      regions.push({ area, x, z, peak });
+    }
+  }
+
+  regions.sort((a, b) => b.area - a.area);
+  return regions.slice(0, MAX_POINTS);
+}
+
+const reportingPoints = (() => {
+  const regions = findLandmasses();
+  if (!regions.length) return [];
+  const stems = NAME_STEMS.slice();
+  const largest = regions[0].area;
+
+  return regions.map((r, i) => {
+    const stem = stems.splice(Math.floor(Math.random() * stems.length), 1)[0] || `POINT ${i + 1}`;
+    // Sized against the biggest landmass, so naming holds up whatever the seed
+    // produces: islands, then isles, then rocks and cays.
+    const share = r.area / largest;
+    const suffix = share > 0.2 ? 'ISLAND' : share > 0.02 ? 'ISLE' : (i % 2 ? 'CAY' : 'ROCK');
+    return { name: `${stem} ${suffix}`, x: r.x, z: r.z, area: r.area, peak: r.peak };
+  });
+})();
+
+const MILE = 1000;   // world units per radio "mile"
+const CARDINALS = ['NORTH', 'NORTHEAST', 'EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST'];
+
+function nearestPoint(x, z) {
+  let best = null, bestD = Infinity;
+  for (const p of reportingPoints) {
+    const d = Math.hypot(p.x - x, p.z - z);
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best ? { point: best, dist: bestD } : null;
+}
+
+// Compass sector of (x,z) as seen from the reporting point. North is -z.
+function bearingWord(fromX, fromZ, x, z) {
+  const deg = (THREE.MathUtils.radToDeg(Math.atan2(x - fromX, -(z - fromZ))) + 360) % 360;
+  return CARDINALS[Math.round(deg / 45) % 8];
+}
+
+// "over MARROW ISLE" when close, otherwise "four miles northwest of ...".
+function positionPhrase(x, z) {
+  const near = nearestPoint(x, z);
+  if (!near) return null;
+  if (near.dist < 900) return `over ${near.point.name}`;
+  const miles = Math.max(1, Math.round(near.dist / MILE));
+  return `${miles} mile${miles === 1 ? '' : 's'} ${bearingWord(near.point.x, near.point.z, x, z).toLowerCase()} of ${near.point.name}`;
+}
 
 // World position -> map pixel, given the current player-centred window.
 function mapPx(x, z, out) {
@@ -1622,7 +1732,7 @@ window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
-  radio, emitChatter,
+  radio, emitChatter, reportingPoints, positionPhrase, nearestPoint,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
