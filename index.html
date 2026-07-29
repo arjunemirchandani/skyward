@@ -1034,12 +1034,22 @@ function drawTraffic() {
     mx.lineTo(-3, 2.6);
     mx.lineTo(-3, -2.6);
     mx.closePath();
-    mx.fillStyle = above ? 'rgba(232, 248, 255, .95)' : 'rgba(146, 186, 212, .95)';
+    const alert = a === threat;
+    mx.fillStyle = alert ? '#ff6b5a'
+                         : above ? 'rgba(232, 248, 255, .95)' : 'rgba(146, 186, 212, .95)';
     mx.strokeStyle = 'rgba(8, 20, 30, .7)';
     mx.lineWidth = 0.8;
     mx.fill();
     mx.stroke();
     mx.restore();
+
+    if (alert) {
+      mx.beginPath();
+      mx.arc(px[0], px[1], 7, 0, Math.PI * 2);
+      mx.strokeStyle = 'rgba(255, 107, 90, .9)';
+      mx.lineWidth = 1.2;
+      mx.stroke();
+    }
   }
 }
 
@@ -1195,15 +1205,14 @@ function updateFlight(dt) {
 
   // ---- stall: below flying speed the nose drops and the plane sinks
   let sink = 0;
+  let warning = '';
   if (state.speed < STALL_SPEED) {
     const s = (STALL_SPEED - state.speed) / STALL_SPEED;
     sink = s * 130;
     plane.rotateOnWorldAxis(right.clone().setY(0).normalize(), -s * 1.6 * dt);
-    setWarn('STALL');
+    warning = 'STALL';
   } else if (plane.position.y - terrainHeight(plane.position.x, plane.position.z) < 130 && fwd.y < 0.05) {
-    setWarn('TERRAIN');
-  } else {
-    setWarn('');
+    warning = 'TERRAIN';
   }
 
   // ---- integrate
@@ -1220,7 +1229,7 @@ function updateFlight(dt) {
     const home = new THREE.Vector3(-plane.position.x, 0, -plane.position.z).normalize();
     const cross = fwd.clone().cross(home).y;
     plane.rotateOnWorldAxis(WORLD_UP, Math.sign(cross) * push * 0.9 * dt);
-    setWarn('LEAVING AREA');
+    warning = 'LEAVING AREA';
   }
   if (plane.position.y > 4200) {
     plane.position.y = 4200;
@@ -1232,6 +1241,14 @@ function updateFlight(dt) {
   if (plane.position.y - 1.2 < groundY) {
     crash();
   }
+
+  // ---- other aircraft: proximity alert, then metal on metal
+  scanTraffic(dt);
+  if (threatDist < TRAFFIC_COLLIDE) crash();
+  else if (threat) warning = 'TRAFFIC';
+
+  // crash() posts its own message — don't paper over it with an advisory.
+  if (!state.crashed) setWarn(warning);
 
   // ---- prop spin
   plane.userData.prop.rotation.z += (6 + state.throttle * 46) * dt;
@@ -1411,6 +1428,32 @@ function spawnTraffic() {
     };
     placeTraffic(entry);
     traffic.push(entry);
+  }
+}
+
+// ---- proximity alerting
+const TRAFFIC_ALERT = 750;     // start warning at this range
+const TRAFFIC_COLLIDE = 26;    // and this is a mid-air
+let threat = null;             // nearest aircraft, when inside the alert radius
+let threatDist = Infinity;
+let blipTimer = 0;
+
+function scanTraffic(dt) {
+  threat = null;
+  threatDist = Infinity;
+
+  for (const a of traffic) {
+    const d = a.mesh.position.distanceTo(plane.position);
+    if (d < threatDist) { threatDist = d; threat = a; }
+  }
+
+  if (threatDist > TRAFFIC_ALERT) { threat = null; blipTimer = 0; return; }
+
+  // Blip faster the closer they get.
+  blipTimer -= dt;
+  if (blipTimer <= 0) {
+    blipTimer = THREE.MathUtils.clamp(threatDist / TRAFFIC_ALERT, 0.13, 1.0);
+    tone(1180, 0.06, 0.13, 'square');
   }
 }
 
