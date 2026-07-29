@@ -171,7 +171,7 @@
 <div id="start">
   <div>
     <h1>SKYWARD</h1>
-    <div class="sub">ARCADE FLIGHT</div>
+    <div class="sub">ARCADE FLIGHT &nbsp;&middot;&nbsp; CALLSIGN REDTAIL ONE</div>
     <table>
       <tr><td>W / S</td><td>pitch down / up</td></tr>
       <tr><td>A / D</td><td>roll left / right</td></tr>
@@ -568,6 +568,11 @@ function checkRing() {
   if (nextRing >= rings.length) {
     courseDone = true;
     finishCourse();
+  } else if (nextRing % 4 === 0) {
+    // A progress call every fourth gate — often enough to feel watched, rare
+    // enough not to crowd the frequency.
+    const near = nearestPoint(rings[nextRing].mesh.position.x, rings[nextRing].mesh.position.z);
+    radio(STATION, `${PLAYER_CS}, gate ${nextRing} confirmed, next gate ${near ? near.point.name : 'ahead'}.`, true);
   }
 }
 
@@ -640,6 +645,11 @@ function respawn() {
   state.throttle = 0.75;
   state.crashed = false;
   state.crashT = 0;
+
+  if (state.started) {
+    prevWarning = '';   // a fresh start should be able to re-issue advisories
+    radio(STATION, `${PLAYER_CS}, radar contact, resume own navigation.`, true);
+  }
 }
 respawn();
 
@@ -787,6 +797,10 @@ function startGame() {
   initAudio();
   if (audio && audio.state === 'suspended') audio.resume();
   buildCourse();
+
+  // Opening clearance, once the first gate exists to name.
+  const near = rings.length ? nearestPoint(rings[0].mesh.position.x, rings[0].mesh.position.z) : null;
+  radio(STATION, `${PLAYER_CS}, Skyward Center, radar contact. Cleared for the gate course, ${RING_COUNT} gates, first gate ${near ? near.point.name : 'ahead'}.`, true);
 }
 startEl.addEventListener('click', startGame);
 
@@ -840,9 +854,14 @@ const el = {
   flash: document.getElementById('flash')
 };
 
+let prevWarning = '';
 function setWarn(text) {
   if (text) { el.warn.textContent = text; el.warn.classList.add('on'); }
   else el.warn.classList.remove('on');
+  if (text !== prevWarning) {
+    prevWarning = text;
+    onWarningChange(text);
+  }
 }
 
 let bannerTimer = 0;
@@ -869,6 +888,7 @@ function finishCourse() {
   tone(660, 0.25, 0.22, 'triangle');
   tone(880, 0.25, 0.22, 'triangle', 0.16);
   tone(1320, 0.55, 0.20, 'triangle', 0.32);
+  radio(STATION, `${PLAYER_CS}, all gates complete, time ${t.toFixed(1)}.${record ? ' New personal best.' : ''}`, true);
   setTimeout(() => { if (courseDone) newCourse(); }, 4000);
 }
 
@@ -876,6 +896,8 @@ function newCourse() {
   buildCourse();
   state.time = 0;
   setBanner('<b>NEW COURSE</b>FLY THROUGH THE GOLD RING', 2.2);
+  const near = rings.length ? nearestPoint(rings[0].mesh.position.x, rings[0].mesh.position.z) : null;
+  radio(STATION, `${PLAYER_CS}, cleared for the gate course, ${RING_COUNT} gates, first gate ${near ? near.point.name : 'ahead'}.`, true);
 }
 
 // ---- on-screen marker pointing at the next ring
@@ -991,6 +1013,68 @@ function updateChatter(dt) {
     chatterTimer = 7 + Math.random() * 9;
     emitChatter();
   }
+  updatePlayerRadio(dt);
+}
+
+// ---------------------------------------------------------------------------
+// Center talking to the player
+// ---------------------------------------------------------------------------
+const PLAYER_CS = 'REDTAIL ONE';
+
+// Advisories repeat only after a decent gap, so a sustained condition does not
+// turn into a stuck record.
+const lastSaid = {};
+function atcAdvise(key, text, minGap) {
+  const now = clock.elapsedTime;
+  if (lastSaid[key] !== undefined && now - lastSaid[key] < minGap) return;
+  lastSaid[key] = now;
+  radio(STATION, text, true);
+}
+
+// Bearing to a target as a clock face: 12 is straight ahead, 3 off the right wing.
+function clockPosition(target) {
+  const fx = fwd.x, fz = fwd.z;
+  const len = Math.hypot(fx, fz) || 1;
+  const ax = fx / len, az = fz / len;
+  const rx = -az, rz = ax;                        // right wing, horizontal
+  const dx = target.x - plane.position.x, dz = target.z - plane.position.z;
+  const deg = THREE.MathUtils.radToDeg(Math.atan2(dx * rx + dz * rz, dx * ax + dz * az));
+  let hour = Math.round(deg / 30);
+  if (hour <= 0) hour += 12;
+  return hour;
+}
+
+function altWord(y) {
+  const d = y - plane.position.y;
+  if (d > 60) return 'high';
+  if (d < -60) return 'low';
+  return 'same altitude';
+}
+
+let advisedAircraft = null;
+
+function updatePlayerRadio() {
+  if (state.crashed) return;
+
+  if (threat) {
+    // One advisory per contact, and never more often than every nine seconds.
+    if (threat !== advisedAircraft) {
+      advisedAircraft = threat;
+      atcAdvise('traffic',
+        `${PLAYER_CS}, traffic, ${clockPosition(threat.mesh.position)} o'clock, less than a mile, ${altWord(threat.mesh.position.y)}.`,
+        9);
+    }
+  } else {
+    advisedAircraft = null;
+  }
+}
+
+// Called from setWarn when the advisory actually changes, not every frame.
+function onWarningChange(w) {
+  if (!state.started) return;
+  if (w === 'TERRAIN') atcAdvise('terrain', `${PLAYER_CS}, low altitude alert, check your altitude.`, 14);
+  else if (w === 'LEAVING AREA') atcAdvise('airspace', `${PLAYER_CS}, you are leaving controlled airspace, turn back.`, 16);
+  else if (w === 'CRASHED') radio(STATION, `${PLAYER_CS}, radar contact lost.`, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1800,7 +1884,7 @@ window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
-  radio, emitChatter, reportingPoints, positionPhrase, nearestPoint,
+  radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
