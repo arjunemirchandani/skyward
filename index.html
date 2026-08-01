@@ -876,7 +876,10 @@ updateWind(0);
 let turbLevel = 0;
 
 function turbulence(dt, t, agl, roughBelow) {
-  const strength = Math.min(1, wind.speed / 18);
+  // Rain and cloud make the same wind feel rougher, but the clamp means the
+  // worst case is still the envelope already verified as outflyable.
+  const wx = 1 + weather.rain * 0.85 + cloudMix * 0.45;
+  const strength = Math.min(1, (wind.speed / 18) * wx);
   const low = Math.max(0, Math.min(1, 1 - agl / 900));
   const flare = 0.3 + 0.7 * Math.min(1, agl / 60);
   turbLevel = strength * (0.18 + low * roughBelow * 0.95) * flare;
@@ -921,6 +924,10 @@ const SKY_TOP_CLEAR = new THREE.Color(0x1d5fa8);
 const SKY_TOP_MURK = new THREE.Color(0x6b7885);
 const skyTop = new THREE.Color();
 
+const OCEAN_CLEAR = new THREE.Color(0x2b6f9c);
+const OCEAN_MURK = new THREE.Color(0x4a5a66);
+const oceanColour = new THREE.Color();
+
 function weatherName() {
   if (weather.rain > 0.25) return 'RAIN';
   if (weather.visibility < 2600) return 'FOG';
@@ -958,6 +965,11 @@ function updateWeather(t) {
   sun.intensity = 2.6 * (1 - a * 0.72);
   fill.intensity = 0.7 + a * 0.5;
   hemi.intensity = 1.9 + a * 0.7;
+
+  // Water takes its colour from the sky, so a storm sky over bright blue sea
+  // does not read as two different days.
+  oceanColour.copy(OCEAN_CLEAR).lerp(OCEAN_MURK, a * 0.88);
+  ocean.material.color.copy(oceanColour);
 }
 
 // Inside the deck there is nothing to see. Applied after the camera has moved,
@@ -988,6 +1000,65 @@ function updateCloudImmersion() {
   // otherwise a horizon stays visible through what should be solid cloud.
   sky.material.uniforms.uTop.value.lerp(scene.fog.color, m);
   sky.material.uniforms.uBottom.value.lerp(scene.fog.color, m);
+}
+
+// Rain lives in camera-local space: drops fall and recycle within a small box
+// around the eye rather than being advected through the world, which is what
+// makes it read at 300 units/s as well as at a standstill. One draw call.
+const RAIN_MAX = 800;
+const RAIN_BOX = 70;
+const rainDrops = [];
+const rainPos = new Float32Array(RAIN_MAX * 2 * 3);
+const rainGeo = new THREE.BufferGeometry();
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+rainGeo.setDrawRange(0, 0);
+
+const rainLines = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
+  color: 0xc4d6e6, transparent: true, opacity: 0.0, depthWrite: false, fog: false
+}));
+rainLines.frustumCulled = false;
+scene.add(rainLines);
+
+for (let i = 0; i < RAIN_MAX; i++) {
+  rainDrops.push({
+    x: (Math.random() - 0.5) * RAIN_BOX * 2,
+    y: (Math.random() - 0.5) * RAIN_BOX * 2,
+    z: (Math.random() - 0.5) * RAIN_BOX * 2
+  });
+}
+
+const rainStreak = new THREE.Vector3();
+
+function updateRain(dt) {
+  const wet = Math.min(1, weather.rain * 1.3);
+  const n = Math.floor(RAIN_MAX * wet);
+  rainLines.material.opacity = 0.6 * wet;
+  rainGeo.setDrawRange(0, n * 2);
+  if (n === 0) return;
+
+  // Streaks lean back along the direction of travel, so they smear with speed.
+  rainStreak.copy(state.vel).multiplyScalar(-0.055);
+  rainStreak.y -= 9;
+  if (rainStreak.length() > 46) rainStreak.setLength(46);
+
+  const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  for (let i = 0; i < n; i++) {
+    const d = rainDrops[i];
+    d.y -= 130 * dt;
+    if (d.y < -RAIN_BOX) {
+      d.y = RAIN_BOX;
+      d.x = (Math.random() - 0.5) * RAIN_BOX * 2;
+      d.z = (Math.random() - 0.5) * RAIN_BOX * 2;
+    }
+    const o = i * 6;
+    rainPos[o]     = cx + d.x;
+    rainPos[o + 1] = cy + d.y;
+    rainPos[o + 2] = cz + d.z;
+    rainPos[o + 3] = cx + d.x + rainStreak.x;
+    rainPos[o + 4] = cy + d.y + rainStreak.y;
+    rainPos[o + 5] = cz + d.z + rainStreak.z;
+  }
+  rainGeo.attributes.position.needsUpdate = true;
 }
 
 function visibilityText() {
@@ -3302,7 +3373,7 @@ window.SKYWARD = {
   updateFlight, updateHud, updateMarker, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
   weather, updateWeather, visibilityText, updateClouds, updateCloudImmersion,
-  get cloudMix() { return cloudMix; }, CLOUD_THICK,
+  get cloudMix() { return cloudMix; }, CLOUD_THICK, updateRain, rainLines,
   preferredEnd, windsocks, updateWindsocks,
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
   progressAtStake, get pendingConfirm() { return pendingConfirm; },
@@ -3343,6 +3414,7 @@ function tick() {
   updateCamera(dt, fwd, up);
   updateClouds();
   updateCloudImmersion();
+  updateRain(dt);
   updateSunShadow();
   sky.position.copy(camera.position);
   ocean.position.x = camera.position.x;
