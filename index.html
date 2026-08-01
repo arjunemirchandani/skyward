@@ -215,6 +215,7 @@
     <div class="row"><span class="k">ALT</span><span class="v" id="alt">0</span></div>
     <div class="row"><span class="k">HDG</span><span class="v" id="hdg">000</span></div>
     <div class="row"><span class="k">WIND</span><span class="v" id="wind">—</span></div>
+    <div class="row"><span class="k">WX</span><span class="v" id="wx">—</span></div>
     <div class="row" style="margin-top:6px"><span class="k">THR</span><span class="v" id="thr">0%</span></div>
     <div class="bar"><i id="thrbar"></i></div>
   </div>
@@ -442,7 +443,8 @@ function updateSunShadow() {
 const fill = new THREE.DirectionalLight(0xcfe6ff, 0.7);
 fill.position.set(-0.6, 0.35, -0.5).multiplyScalar(3000);
 scene.add(fill);
-scene.add(new THREE.HemisphereLight(0xcbe7fb, 0x6d7a5c, 1.9));
+const hemi = new THREE.HemisphereLight(0xcbe7fb, 0x6d7a5c, 1.9);
+scene.add(hemi);
 
 // ---------------------------------------------------------------------------
 // Terrain
@@ -866,6 +868,72 @@ function turbulence(dt, t, agl, roughBelow) {
 
 function windCompass() {
   return String(Math.round(((THREE.MathUtils.radToDeg(wind.from) % 360) + 360) % 360)).padStart(3, '0');
+}
+
+// ---------------------------------------------------------------------------
+// Weather
+// ---------------------------------------------------------------------------
+// One slowly-drifting master variable drives everything, so conditions stay
+// coherent: more cloud means lower cloud, poorer visibility and flatter light,
+// the way real weather actually arrives.
+const weather = {
+  cover: 0.25,        // 0 clear .. 1 solid overcast
+  visibility: 11000,  // world units
+  ceiling: 2600,      // cloud base above sea level
+  rain: 0,
+  name: 'CLEAR'
+};
+
+const CLEAR_FOG = HORIZON.clone();
+const MURK = new THREE.Color(0x9AA4AE);
+const fogColour = new THREE.Color();
+
+const SKY_TOP_CLEAR = new THREE.Color(0x1d5fa8);
+const SKY_TOP_MURK = new THREE.Color(0x6b7885);
+const skyTop = new THREE.Color();
+
+function weatherName() {
+  if (weather.rain > 0.25) return 'RAIN';
+  if (weather.visibility < 2600) return 'FOG';
+  if (weather.cover > 0.58) return 'OVERCAST';
+  if (weather.cover > 0.32) return 'SCATTERED';
+  return 'CLEAR';
+}
+
+function updateWeather(t) {
+  // `hold` pins the current conditions — used to reproduce a specific sky when
+  // testing, since otherwise the loop overwrites it every frame.
+  const a = weather.hold ? weather.cover
+          : THREE.MathUtils.clamp(noise2(t * 0.0065 + 4.2, 41.3) * 1.45 - 0.2, 0, 1);
+  const b = weather.hold ? weather.rainSeed : noise2(t * 0.012 + 9.1, 77.1);
+  weather.rainSeed = b;
+
+  weather.cover = a;
+  weather.visibility = THREE.MathUtils.lerp(1200, 11500, Math.pow(1 - a, 0.85));
+  weather.ceiling = THREE.MathUtils.lerp(260, 2700, Math.pow(1 - a, 0.8));
+  // Rain only out of the thickest cloud, so OVERCAST gets a band of its own.
+  weather.rain = THREE.MathUtils.clamp((a - 0.74) * 4.0, 0, 1) * THREE.MathUtils.clamp(b * 1.6, 0, 1);
+  weather.name = weatherName();
+
+  // Fog carries the visibility, and greys out as the cloud thickens.
+  fogColour.copy(CLEAR_FOG).lerp(MURK, a * 0.9);
+  scene.fog.color.copy(fogColour);
+  scene.fog.far = weather.visibility;
+  scene.fog.near = weather.visibility * 0.16;
+
+  skyTop.copy(SKY_TOP_CLEAR).lerp(SKY_TOP_MURK, a * 0.85);
+  sky.material.uniforms.uTop.value.copy(skyTop);
+  sky.material.uniforms.uBottom.value.copy(fogColour);
+
+  // Flat, shadowless light under thick cloud.
+  sun.intensity = 2.6 * (1 - a * 0.72);
+  fill.intensity = 0.7 + a * 0.5;
+  hemi.intensity = 1.9 + a * 0.7;
+}
+
+function visibilityText() {
+  const km = weather.visibility / 1000;
+  return km >= 10 ? '10km+' : `${km.toFixed(1)}km`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1482,6 +1550,7 @@ const el = {
   alt: document.getElementById('alt'),
   hdg: document.getElementById('hdg'),
   wind: document.getElementById('wind'),
+  wx: document.getElementById('wx'),
   thr: document.getElementById('thr'),
   thrbar: document.getElementById('thrbar'),
   time: document.getElementById('time'),
@@ -2402,6 +2471,7 @@ function updateHud() {
   const hdg = (Math.round(THREE.MathUtils.radToDeg(Math.atan2(fwd.x, -fwd.z))) + 360) % 360;
   el.hdg.textContent = String(hdg).padStart(3, '0');
   el.wind.textContent = `${windCompass()}/${Math.round(wind.speed)}`;
+  el.wx.textContent = `${weather.name} ${visibilityText()}`;
   el.thr.textContent = Math.round(state.throttle * 100) + '%';
   el.thrbar.style.width = (state.throttle * 100) + '%';
   el.time.textContent = state.time.toFixed(1);
@@ -3027,7 +3097,9 @@ function scanTraffic(dt) {
 const GLINT_MAX = 300;
 const GLINT_NEAR = 700;     // fully mesh below this
 const GLINT_FULL = 1500;    // glint at full strength beyond this
-const GLINT_FADE = 8600;    // gone by here, in step with the fog
+// Glints fade with the fog, so traffic disappears into murk just like the
+// terrain does rather than hanging as specks in a whiteout.
+function glintFade() { return Math.max(GLINT_FULL + 400, weather.visibility * 0.82); }
 
 const glintTexture = (() => {
   const s = 32, cv = document.createElement('canvas');
@@ -3079,13 +3151,14 @@ scene.add(glints);
 
 function updateGlints() {
   let n = 0;
+  const fade = glintFade();
   for (let i = 0; i < traffic.length && n < GLINT_MAX; i++) {
     const p = traffic[i].mesh.position;
     const d = p.distanceTo(camera.position);
-    if (d < GLINT_NEAR || d > GLINT_FADE) continue;
+    if (d < GLINT_NEAR || d > fade) continue;
 
     const rise = Math.min(1, (d - GLINT_NEAR) / (GLINT_FULL - GLINT_NEAR));
-    const fall = Math.min(1, (GLINT_FADE - d) / 2200);
+    const fall = Math.min(1, (fade - d) / Math.max(400, fade * 0.25));
     glintPos[n * 3] = p.x; glintPos[n * 3 + 1] = p.y; glintPos[n * 3 + 2] = p.z;
     glintAlpha[n] = rise * fall * 0.95;
     n++;
@@ -3169,6 +3242,7 @@ window.SKYWARD = {
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, updateHud, updateMarker, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
+  weather, updateWeather, visibilityText,
   preferredEnd, windsocks, updateWindsocks,
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
   progressAtStake, get pendingConfirm() { return pendingConfirm; },
@@ -3184,6 +3258,7 @@ function tick() {
 
   const t = clock.elapsedTime;
   updateWind(t);
+  updateWeather(t);
   updateWindsocks();
   updateTraffic(dt);
 
