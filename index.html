@@ -1338,7 +1338,7 @@ function startMission() {
   placeOnRunway(origin, end);
   state.time = 0;
 
-  atcToPlayer(`${PLAYER_CS}, cleared to ${dest.name} via ${mission.gatesTotal} gates. Runway ${end}, cleared for takeoff.`);
+  atcToPlayer(`${PLAYER_CS}, cleared to ${dest.name} via ${mission.gatesTotal} gates. Runway ${end}, wind ${windCompass()} at ${Math.round(wind.speed)}, ${weather.name.toLowerCase()}, visibility ${visibilityText()}, ceiling ${feet(weather.ceiling)}. Cleared for takeoff.`);
   setBanner(`<b>${dest.name}</b>${mission.gatesTotal} GATES &middot; RUNWAY ${end}`, 4);
 }
 
@@ -2778,16 +2778,30 @@ function updateApproach() {
   const xw = Math.round(Math.abs(a.crosswind));
   const side = a.crosswind > 0 ? 'L' : 'R';     // pushing you right means it comes from the left
   const hw = Math.round(a.headwind);
-  ilsEl.xw.textContent = xw >= 1
+  ilsEl.xw.innerHTML = (xw >= 1
     ? `X-WIND ${side} ${xw} · ${hw >= 0 ? 'HW' : 'TW'} ${Math.abs(hw)}`
-    : `${hw >= 0 ? 'HW' : 'TW'} ${Math.abs(hw)}`;
+    : `${hw >= 0 ? 'HW' : 'TW'} ${Math.abs(hw)}`)
+    + (weather.cover > 0.35
+        ? `<br><span style="opacity:.75">CEIL ${feet(weather.ceiling)} · VIS ${visibilityText()}</span>` : '');
 
   // Clearance, once you are actually established on final.
   if (a.aligned && a.toThreshold < 4000 && Math.abs(a.gsDeg) < GS_FULL) {
     const better = preferredEnd(a.field);
     const note = better !== a.rwy ? ` Wind favours runway ${better}.` : '';
+    const wx = weather.visibility < 4000 || weather.ceiling < 500
+      ? ` Ceiling ${feet(weather.ceiling)}, visibility ${visibilityText()}.` : '';
     atcAdvise(`land-${a.field.name}-${a.rwy}`,
-      `${PLAYER_CS}, ${a.field.name}, wind ${windCompass()} at ${Math.round(wind.speed)}, cleared to land runway ${a.rwy}.${note}`, 40);
+      `${PLAYER_CS}, ${a.field.name}, wind ${windCompass()} at ${Math.round(wind.speed)},${wx} cleared to land runway ${a.rwy}.${note}`, 40);
+  }
+
+  // Coming down through the deck on final: call it, the way a crew would.
+  if (a.toThreshold > 0 && a.toThreshold < 5000) {
+    const agl = plane.position.y - a.field.elev;
+    if (cloudMix > 0.4) {
+      atcAdvise('in-cloud', `${PLAYER_CS}, you are in cloud. Instruments only, follow the needles down.`, 30);
+    } else if (weather.cover > 0.35 && agl < 260 && plane.position.y < weather.ceiling) {
+      atcAdvise('visual', `${PLAYER_CS}, runway in sight?`, 30);
+    }
   }
 }
 
