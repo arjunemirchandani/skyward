@@ -2118,8 +2118,123 @@ function drawAttitude(bank, pitchDeg) {
   ix.stroke();
 }
 
-function drawInstruments() {
+// ---- vertical speed and rate of turn
+const SIDE_R = 34;
+const VSI_CX = INST_W - SIDE_R - 12, VSI_CY = INST_H / 2;
+const TC_CX = SIDE_R + 12, TC_CY = INST_H / 2;
+
+// Real vertical-speed dials compress towards the ends, and this flight model
+// needs it: a landing descent is 300 fpm while a climb-out is several thousand.
+// A linear scale would either peg constantly or be unreadable near zero.
+const VSI_FULL = 6000;
+const VSI_CURVE = 0.6;
+function vsiDeflect(fpm) {
+  const t = THREE.MathUtils.clamp(Math.abs(fpm) / VSI_FULL, 0, 1);
+  return Math.sign(fpm) * Math.pow(t, VSI_CURVE);
+}
+let vsiShown = 0;           // both needles are damped, like real instruments
+let turnShown = 0;
+let lastHeading = null;
+let turnRate = 0;           // deg/s, positive to the right
+
+function updateTurnRate(dt) {
+  const h = Math.atan2(fwd.x, -fwd.z);
+  if (lastHeading !== null && dt > 0) {
+    let d = h - lastHeading;
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    const inst = THREE.MathUtils.radToDeg(d) / dt;
+    turnRate += (inst - turnRate) * (1 - Math.exp(-6 * dt));
+  }
+  lastHeading = h;
+}
+
+function dial(cx, cy, label) {
+  ix.beginPath();
+  ix.arc(cx, cy, SIDE_R, 0, Math.PI * 2);
+  ix.fillStyle = 'rgba(10, 22, 32, .55)';
+  ix.fill();
+  ix.strokeStyle = 'rgba(140,230,255,.35)';
+  ix.lineWidth = 1;
+  ix.stroke();
+
+  ix.fillStyle = 'rgba(205,246,255,.55)';
+  ix.font = '600 6.5px ui-monospace, Menlo, monospace';
+  ix.textAlign = 'center';
+  ix.textBaseline = 'middle';
+  ix.fillText(label, cx, cy + SIDE_R - 8);
+}
+
+// Climb needle: straight up is level, deflecting up for climb, down for descent.
+function drawVSI(fpm) {
+  dial(VSI_CX, VSI_CY, 'V/S');
+
+  ix.strokeStyle = 'rgba(205,246,255,.5)';
+  for (const v of [-6000, -2000, -500, 0, 500, 2000, 6000]) {
+    const a = Math.PI + vsiDeflect(v) * (Math.PI * 0.42);
+    const len = v === 0 ? 8 : 5;
+    ix.lineWidth = v === 0 ? 1.5 : 1;
+    ix.beginPath();
+    ix.moveTo(VSI_CX + Math.cos(a) * SIDE_R, VSI_CY + Math.sin(a) * SIDE_R);
+    ix.lineTo(VSI_CX + Math.cos(a) * (SIDE_R - len), VSI_CY + Math.sin(a) * (SIDE_R - len));
+    ix.stroke();
+  }
+
+  const a = Math.PI + vsiDeflect(fpm) * (Math.PI * 0.42);
+  ix.strokeStyle = Math.abs(fpm) > VSI_FULL * 0.98 ? '#ff8a5a' : '#8affc1';
+  ix.lineWidth = 2;
+  ix.beginPath();
+  ix.moveTo(VSI_CX, VSI_CY);
+  ix.lineTo(VSI_CX + Math.cos(a) * (SIDE_R - 7), VSI_CY + Math.sin(a) * (SIDE_R - 7));
+  ix.stroke();
+
+  ix.fillStyle = '#eafcff';
+  ix.font = '600 8px ui-monospace, Menlo, monospace';
+  ix.fillText(Math.abs(fpm) < 10000 ? String(Math.round(fpm / 50) * 50) : '—', VSI_CX, VSI_CY - 13);
+}
+
+// Turn coordinator: a little aeroplane that banks with the rate of turn, with
+// marks at the standard rate of three degrees per second.
+function drawTurn(rate) {
+  dial(TC_CX, TC_CY, 'TURN');
+
+  ix.strokeStyle = 'rgba(205,246,255,.5)';
+  ix.lineWidth = 1;
+  for (const s of [-1, 1]) {
+    const a = -Math.PI / 2 + s * 0.62;
+    ix.beginPath();
+    ix.moveTo(TC_CX + Math.cos(a) * SIDE_R, TC_CY + Math.sin(a) * SIDE_R);
+    ix.lineTo(TC_CX + Math.cos(a) * (SIDE_R - 7), TC_CY + Math.sin(a) * (SIDE_R - 7));
+    ix.stroke();
+  }
+
+  const tilt = THREE.MathUtils.clamp(rate / 3, -1.6, 1.6) * 0.62;
+  ix.save();
+  ix.translate(TC_CX, TC_CY - 2);
+  ix.rotate(tilt);
+  ix.strokeStyle = '#ffd257';
+  ix.lineWidth = 2;
+  ix.beginPath();
+  ix.moveTo(-19, 0); ix.lineTo(19, 0);
+  ix.moveTo(0, 0); ix.lineTo(0, -7);
+  ix.stroke();
+  ix.beginPath();
+  ix.arc(0, 0, 3, 0, Math.PI * 2);
+  ix.stroke();
+  ix.restore();
+}
+
+function drawInstruments(dt) {
+  updateTurnRate(dt);
+
+  // Damp both needles so they read like instruments rather than raw telemetry.
+  const k = 1 - Math.exp(-5 * Math.max(dt, 1 / 240));
+  vsiShown += (state.vel.y * FEET * 60 - vsiShown) * k;
+  turnShown += (turnRate - turnShown) * k;
+
   ix.clearRect(0, 0, INST_W, INST_H);
+  drawTurn(turnShown);
+  drawVSI(vsiShown);
   drawAttitude(bankAngle(), THREE.MathUtils.radToDeg(pitchAngle()));
 }
 
@@ -3535,7 +3650,8 @@ window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
-  drawInstruments, bankAngle, pitchAngle,
+  drawInstruments, bankAngle, pitchAngle, instPanel,
+  get turnRate() { return turnRate; },
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, updateHud, updateMarker, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
@@ -3592,7 +3708,7 @@ function tick() {
   updateMarker();
   updateEngine();
   updateGlints();
-  drawInstruments();
+  drawInstruments(dt);
   drawMap(t);
 
   renderer.render(scene, camera);
