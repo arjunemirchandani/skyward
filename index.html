@@ -32,6 +32,7 @@
   }
   #misHdr b { display: block; font-size: 9px; letter-spacing: 2px; opacity: .65; color: #cdf6ff; margin-top: 2px; }
   #help  { left: 18px;  top: 18px; opacity: .72; line-height: 1.65; }
+  #help.hidden { display: none; }
 
   .row { display: flex; justify-content: space-between; gap: 14px; }
   .k { opacity: .6; }
@@ -80,6 +81,8 @@
   #ils .ft { margin-top: 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
   #ils .xw { margin-top: 3px; font-size: 10px; letter-spacing: 1px; color: #ffcf8a; opacity: .85; }
 
+  /* `top` is set from the help panel's measured height at runtime, so the two
+     can never overlap however many keys the help gains. */
   #radio {
     position: absolute; left: 18px; top: 200px; width: 340px;
     display: flex; flex-direction: column; gap: 5px;
@@ -199,15 +202,12 @@
 
 <div id="hud">
   <div class="panel" id="help">
-    W / S &nbsp; pitch<br>
-    A / D &nbsp; roll<br>
-    Q / E &nbsp; rudder<br>
-    &uarr; / &darr; &nbsp; throttle<br>
-    C camera &nbsp;&middot;&nbsp; R respawn<br>
-    B &nbsp; new mission<br>
-    N free course &nbsp;&middot;&nbsp; M mute<br>
-    Z &nbsp; map zoom<br>
-    SPACE &nbsp; brakes (on ground)
+    W/S pitch &nbsp;&middot;&nbsp; A/D roll<br>
+    Q/E rudder &nbsp;&middot;&nbsp; &uarr;/&darr; throttle<br>
+    SPACE brakes &nbsp;&middot;&nbsp; R respawn<br>
+    B mission &nbsp;&middot;&nbsp; N free course<br>
+    C camera &nbsp;&middot;&nbsp; Z map &nbsp;&middot;&nbsp; M mute<br>
+    <span style="opacity:.55">H &nbsp; hide this</span>
   </div>
 
   <div class="panel" id="left">
@@ -292,6 +292,7 @@
       <tr><td>N / M</td><td>free gate course / mute</td></tr>
       <tr><td>Z</td><td>minimap zoom</td></tr>
       <tr><td>SPACE</td><td>wheel brakes on the ground</td></tr>
+      <tr><td>H</td><td>hide the controls panel</td></tr>
     </table>
     <div class="sub" style="letter-spacing:2px;margin-bottom:6px">PRESS <b style="color:#8affc1">B</b> FOR A MISSION &mdash; TAKE OFF, FLY THE GATES, LAND AT THE FIELD</div>
     <div class="sub" style="letter-spacing:2px;margin-bottom:18px;opacity:.5">OR JUST FLY &mdash; N FOR A FREE GATE COURSE</div>
@@ -1600,7 +1601,7 @@ function guarded(code, keyLabel, action) {
 // ---------------------------------------------------------------------------
 const keys = new Set();
 const TRACKED = new Set([
-  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB',
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB','KeyH',
   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
 ]);
 
@@ -1622,6 +1623,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyN') guarded('KeyN', 'N', () => { endMission(); newCourse(); });
   if (e.code === 'KeyB') guarded('KeyB', 'B', startMission);
   if (e.code === 'KeyZ') cycleMapZoom();
+  if (e.code === 'KeyH') toggleHelp();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -1812,6 +1814,24 @@ function flash() {
 const STATION = 'SKYWARD CENTER';
 const radioEl = document.getElementById('radio');
 const RADIO_MAX = 5;
+
+const helpEl = document.getElementById('help');
+
+// Stack the radio log under the help panel by measurement rather than by a
+// hard-coded offset — the help panel grew every time a key was added, and a
+// fixed number silently went stale.
+function layoutHud() {
+  const showing = !helpEl.classList.contains('hidden');
+  const top = showing ? helpEl.offsetTop + helpEl.offsetHeight + 12 : 18;
+  radioEl.style.top = `${top}px`;
+}
+
+function toggleHelp() {
+  helpEl.classList.toggle('hidden');
+  layoutHud();
+}
+
+addEventListener('resize', layoutHud);
 
 // Messages age out on their own CSS animation, so posting one costs nothing
 // per frame.
@@ -3376,6 +3396,8 @@ spawnTraffic();
 // Loop
 // ---------------------------------------------------------------------------
 const clock = new THREE.Clock();
+
+layoutHud();
 
 // Dev handle — poke at the sim from the console.
 window.SKYWARD = {
