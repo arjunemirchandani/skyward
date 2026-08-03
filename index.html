@@ -214,7 +214,7 @@
     SPACE brakes &nbsp;&middot;&nbsp; R respawn<br>
     B mission &nbsp;&middot;&nbsp; N free course<br>
     C camera &nbsp;&middot;&nbsp; Z map &nbsp;&middot;&nbsp; M mute<br>
-    <span style="opacity:.55">H &nbsp; hide this</span>
+    <span style="opacity:.55">H hide this &nbsp;&middot;&nbsp; I instruments</span>
   </div>
 
   <div class="panel" id="left">
@@ -303,7 +303,7 @@
       <tr><td>N / M</td><td>free gate course / mute</td></tr>
       <tr><td>Z</td><td>minimap zoom</td></tr>
       <tr><td>SPACE</td><td>wheel brakes on the ground</td></tr>
-      <tr><td>H</td><td>hide the controls panel</td></tr>
+      <tr><td>H / I</td><td>hide controls / instruments</td></tr>
     </table>
     <div class="sub" style="letter-spacing:2px;margin-bottom:6px">PRESS <b style="color:#8affc1">B</b> FOR A MISSION &mdash; TAKE OFF, FLY THE GATES, LAND AT THE FIELD</div>
     <div class="sub" style="letter-spacing:2px;margin-bottom:18px;opacity:.5">OR JUST FLY &mdash; N FOR A FREE GATE COURSE</div>
@@ -1612,7 +1612,7 @@ function guarded(code, keyLabel, action) {
 // ---------------------------------------------------------------------------
 const keys = new Set();
 const TRACKED = new Set([
-  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB','KeyH',
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB','KeyH','KeyI',
   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
 ]);
 
@@ -1635,6 +1635,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyB') guarded('KeyB', 'B', startMission);
   if (e.code === 'KeyZ') cycleMapZoom();
   if (e.code === 'KeyH') toggleHelp();
+  if (e.code === 'KeyI') instPanel.classList.toggle('hidden');
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
