@@ -146,6 +146,9 @@
     border-radius: 9px; backdrop-filter: blur(3px);
     font-size: 11px; letter-spacing: 2px; color: #ffcf8a;
     opacity: 0; transition: opacity .18s;
+    /* Above the logbook, or the prompt asking to erase it would be hidden
+       behind the very panel it is asking about. */
+    z-index: 6;
   }
   #confirm.on { opacity: 1; }
   #confirm b {
@@ -196,6 +199,7 @@
     border-bottom: 1px solid rgba(140, 230, 255, .2);
   }
   .lgHd span { float: right; font-size: 10px; letter-spacing: 2px; opacity: .5; }
+  .lgHd span b { color: #ffcf8a; font-weight: 600; }
   .lgTotals {
     display: flex; flex-wrap: wrap; gap: 18px 26px; margin-bottom: 18px;
   }
@@ -306,7 +310,7 @@
   <div id="confirm"></div>
 
   <div id="logbook">
-    <div class="lgHd">LOGBOOK <span>L to close</span></div>
+    <div class="lgHd">LOGBOOK <span><b>R</b> to reset &nbsp;&middot;&nbsp; <b>L</b> to close</span></div>
     <div class="lgTotals" id="lgTotals"></div>
     <div class="lgCols">
       <div>
@@ -1449,6 +1453,27 @@ function toggleLogbook() {
   if (showing) renderLogbook();
 }
 
+// Wipe the career. The standalone bests live under their own keys but are part
+// of the same record — leaving them would show a personal best with no flights
+// behind it.
+function resetLogbook() {
+  logbook.flights.length = 0;
+  logbook.totals = { flights: 0, seconds: 0, landings: 0, gates: 0, crashes: 0, gradeSum: 0 };
+  logbook.routes = {};
+  logbook.fields = {};
+  saveLogbook();
+
+  best = null;
+  bestLanding = null;
+  bestMission = null;
+  for (const k of [BEST_KEY, LAND_KEY, MISSION_KEY]) {
+    try { localStorage.removeItem(k); } catch (e) { /* nothing worth failing over */ }
+  }
+
+  renderLogbook();
+  setBanner('<b>LOGBOOK CLEARED</b>', 2.2);
+}
+
 function routeKey(from, to) {
   return `${from.name.split(' ')[0]}>${to.name.split(' ')[0]}`;
 }
@@ -1843,7 +1868,15 @@ addEventListener('keydown', (e) => {
   }
 
   if (TRACKED.has(e.code)) { keys.add(e.code); e.preventDefault(); }
-  if (e.code === 'KeyR') respawn();
+  // R means reset while the logbook is open, respawn otherwise — and erasing a
+  // career always asks first, whatever else is going on.
+  if (e.code === 'KeyR') {
+    if (lgEl.panel.classList.contains('on')) {
+      requestConfirm('KeyR', 'R', 'ERASE THE WHOLE LOGBOOK?', resetLogbook);
+    } else {
+      respawn();
+    }
+  }
   if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
   if (e.code === 'KeyM') { muted = !muted; setBanner(muted ? 'SOUND OFF' : 'SOUND ON', 0.9); }
   if (e.code === 'KeyN') guarded('KeyN', 'N', () => { endMission(); newCourse(); });
@@ -3904,7 +3937,7 @@ window.SKYWARD = {
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
   progressAtStake, get pendingConfirm() { return pendingConfirm; },
   logbook, logFlight, logCrash, saveLogbook, updateLogbook, hoursText, averageGrade, routeKey,
-  renderLogbook, toggleLogbook,
+  renderLogbook, toggleLogbook, resetLogbook,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
