@@ -180,6 +180,47 @@
   #landing .score b, #missionResult .score b { float: right; font-size: 19px; letter-spacing: 0; color: #eafcff; opacity: 1; }
   #landing .score span, #missionResult .score span { display: block; clear: both; padding-top: 6px; font-size: 10px; opacity: .65; }
 
+  #logbook {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(680px, calc(100vw - 60px)); max-height: calc(100vh - 80px); overflow-y: auto;
+    padding: 20px 24px;
+    background: rgba(6, 18, 28, .84);
+    border: 1px solid rgba(140, 230, 255, .3);
+    border-radius: 12px; backdrop-filter: blur(6px);
+    opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 4;
+  }
+  #logbook.on { opacity: 1; }
+  .lgHd {
+    font-size: 14px; letter-spacing: 6px; color: #eafcff;
+    padding-bottom: 11px; margin-bottom: 13px;
+    border-bottom: 1px solid rgba(140, 230, 255, .2);
+  }
+  .lgHd span { float: right; font-size: 10px; letter-spacing: 2px; opacity: .5; }
+  .lgTotals {
+    display: flex; flex-wrap: wrap; gap: 18px 26px; margin-bottom: 18px;
+  }
+  .lgTotals div { min-width: 68px; }
+  .lgTotals b { display: block; font-size: 19px; color: #eafcff; font-weight: 500; }
+  .lgTotals i { font-style: normal; font-size: 9px; letter-spacing: 2px; opacity: .55; }
+  /* Wrap the side column underneath rather than letting either table spill
+     into the other; overflow:hidden is the backstop if content still exceeds. */
+  .lgCols { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: flex-start; }
+  .lgCols > div { flex: 1 1 380px; min-width: 0; overflow: hidden; }
+  .lgSide { flex: 1 1 190px; }
+  .lgSub {
+    font-size: 9px; letter-spacing: 3px; opacity: .55; margin-bottom: 7px;
+  }
+  #logbook table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  #logbook td { padding: 3px 0; border-bottom: 1px solid rgba(140,230,255,.08); white-space: nowrap; }
+  #logbook td + td { padding-left: 14px; }
+  #logbook td.r { text-align: right; width: 1%; }
+  /* One column soaks up the spare width so the rest stay on a single line. */
+  #logbook td.w { width: 99%; }
+  #logbook .g { color: #8affc1; }
+  #logbook .dim { opacity: .5; }
+  #logbook .pb { color: #ffd257; }
+  #logbook .empty { opacity: .45; font-size: 11px; padding: 6px 0; }
+
   #flash {
     position: fixed; inset: 0; background: #ff8a3d; opacity: 0;
     pointer-events: none; transition: opacity .35s ease-out;
@@ -214,6 +255,7 @@
     SPACE brakes &nbsp;&middot;&nbsp; R respawn<br>
     B mission &nbsp;&middot;&nbsp; N free course<br>
     C camera &nbsp;&middot;&nbsp; Z map &nbsp;&middot;&nbsp; M mute<br>
+    L logbook<br>
     <span style="opacity:.55">H hide this &nbsp;&middot;&nbsp; I instruments</span>
   </div>
 
@@ -262,6 +304,21 @@
   <div id="marker"><span id="marker-dist"></span></div>
   <div id="banner"></div>
   <div id="confirm"></div>
+
+  <div id="logbook">
+    <div class="lgHd">LOGBOOK <span>L to close</span></div>
+    <div class="lgTotals" id="lgTotals"></div>
+    <div class="lgCols">
+      <div>
+        <div class="lgSub">RECENT FLIGHTS</div>
+        <table id="lgFlights"></table>
+      </div>
+      <div class="lgSide">
+        <div class="lgSub">BEST BY ROUTE</div>
+        <table id="lgRoutes"></table>
+      </div>
+    </div>
+  </div>
 
   <div id="missionResult">
     <div class="hd">MISSION <b id="mrGrade">A</b></div>
@@ -1344,6 +1401,54 @@ function logCrash() {
   logDirty = true;
 }
 
+// ---- the logbook screen
+const lgEl = {
+  panel: document.getElementById('logbook'),
+  totals: document.getElementById('lgTotals'),
+  flights: document.getElementById('lgFlights'),
+  routes: document.getElementById('lgRoutes')
+};
+
+function renderLogbook() {
+  const t = logbook.totals;
+  lgEl.totals.innerHTML = [
+    ['FLIGHTS', t.flights],
+    ['AIR TIME', hoursText(t.seconds)],
+    ['LANDINGS', t.landings],
+    ['AVG GRADE', averageGrade()],
+    ['GATES', t.gates],
+    ['CRASHES', t.crashes],
+    ['FIELDS', `${Object.keys(logbook.fields).length}/${airfields.length}`]
+  ].map(([k, v]) => `<div><b>${v}</b><i>${k}</i></div>`).join('');
+
+  const rows = logbook.flights.slice(0, 9).map(f => {
+    const when = new Date(f.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const what = f.kind === 'mission'
+      ? `${f.route.replace('>', ' → ')}`
+      : `${f.field.split(' ')[0]} landing`;
+    const detail = f.kind === 'mission'
+      ? `${f.gates}/${f.gatesTotal} gates · ${f.seconds}s`
+      : `rwy ${f.rwy}`;
+    const score = f.kind === 'mission'
+      ? `<span class="${f.routeBest ? 'pb' : 'g'}">${f.score}</span> ${f.grade}`
+      : `<span class="g">${f.landing.score}</span> ${f.landing.grade}`;
+    return `<tr><td class="dim">${when}</td><td>${what}</td>
+            <td class="dim">${detail}</td><td class="dim">${f.wx}</td>
+            <td class="r">${score}</td></tr>`;
+  }).join('');
+  lgEl.flights.innerHTML = rows || '<tr><td class="empty">No flights yet — press B for a mission.</td></tr>';
+
+  const routes = Object.entries(logbook.routes).sort((a, b) => b[1] - a[1]).slice(0, 9);
+  lgEl.routes.innerHTML = routes.length
+    ? routes.map(([k, v]) => `<tr><td class="w">${k.replace('>', ' → ')}</td><td class="r g">${v}</td></tr>`).join('')
+    : '<tr><td class="empty">Nothing flown yet.</td></tr>';
+}
+
+function toggleLogbook() {
+  const showing = lgEl.panel.classList.toggle('on');
+  if (showing) renderLogbook();
+}
+
 function routeKey(from, to) {
   return `${from.name.split(' ')[0]}>${to.name.split(' ')[0]}`;
 }
@@ -1717,7 +1822,7 @@ function guarded(code, keyLabel, action) {
 // ---------------------------------------------------------------------------
 const keys = new Set();
 const TRACKED = new Set([
-  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB','KeyH','KeyI',
+  'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyC','KeyM','KeyN','KeyZ','KeyB','KeyH','KeyI','KeyL',
   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight'
 ]);
 
@@ -1741,6 +1846,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyZ') cycleMapZoom();
   if (e.code === 'KeyH') toggleHelp();
   if (e.code === 'KeyI') instPanel.classList.toggle('hidden');
+  if (e.code === 'KeyL') toggleLogbook();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -3787,6 +3893,7 @@ window.SKYWARD = {
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
   progressAtStake, get pendingConfirm() { return pendingConfirm; },
   logbook, logFlight, logCrash, saveLogbook, updateLogbook, hoursText, averageGrade, routeKey,
+  renderLogbook, toggleLogbook,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
