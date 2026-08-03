@@ -1257,6 +1257,111 @@ function updateRings(dt, t) {
 }
 
 // ---------------------------------------------------------------------------
+// Logbook — the only thing in here that outlives the session
+// ---------------------------------------------------------------------------
+const LOG_KEY = 'skyward.logbook';
+const LOG_MAX = 60;          // keep recent flights bounded; totals are forever
+
+const logbook = {
+  version: 1,
+  flights: [],
+  totals: { flights: 0, seconds: 0, landings: 0, gates: 0, crashes: 0, gradeSum: 0 },
+  routes: {},                // "MARROW>BRINE" -> best mission score
+  fields: {}                 // field name -> arrivals
+};
+
+(function loadLogbook() {
+  try {
+    const raw = localStorage.getItem(LOG_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || saved.version !== 1) return;   // ignore anything we cannot read
+    Object.assign(logbook, saved);
+    // Guard against a truncated or hand-edited file.
+    logbook.flights = Array.isArray(logbook.flights) ? logbook.flights : [];
+    for (const k of ['flights', 'seconds', 'landings', 'gates', 'crashes', 'gradeSum']) {
+      if (!Number.isFinite(logbook.totals[k])) logbook.totals[k] = 0;
+    }
+  } catch (e) {
+    // A corrupt logbook should cost you your history, never the game.
+    console.warn('logbook unreadable, starting fresh', e);
+  }
+})();
+
+let logDirty = false;
+function saveLogbook() {
+  try {
+    localStorage.setItem(LOG_KEY, JSON.stringify(logbook));
+    logDirty = false;
+  } catch (e) {
+    logDirty = false;   // out of quota: drop it rather than retry every frame
+  }
+}
+
+// Airborne seconds accumulate continuously; flush on a timer so we are not
+// writing to storage every frame.
+let logFlushTimer = 0;
+function updateLogbook(dt) {
+  if (state.started && !state.onGround && !state.crashed) {
+    logbook.totals.seconds += dt;
+    logDirty = true;
+  }
+  logFlushTimer -= dt;
+  if (logFlushTimer <= 0) {
+    logFlushTimer = 20;
+    if (logDirty) saveLogbook();
+  }
+}
+
+const GRADE_POINTS = { 'A+': 6, 'A': 5, 'B': 4, 'C': 3, 'D': 2, 'E': 1 };
+
+function logFlight(entry) {
+  entry.at = Date.now();
+  logbook.flights.unshift(entry);
+  if (logbook.flights.length > LOG_MAX) logbook.flights.length = LOG_MAX;
+
+  logbook.totals.flights++;
+  if (entry.landing) {
+    logbook.totals.landings++;
+    logbook.totals.gradeSum += GRADE_POINTS[entry.landing.grade] || 0;
+  }
+  if (entry.gates) logbook.totals.gates += entry.gates;
+  if (entry.field) logbook.fields[entry.field] = (logbook.fields[entry.field] || 0) + 1;
+
+  if (entry.route && Number.isFinite(entry.score)) {
+    const prev = logbook.routes[entry.route];
+    if (prev === undefined || entry.score > prev) {
+      logbook.routes[entry.route] = entry.score;
+      entry.routeBest = true;
+    }
+  }
+  saveLogbook();
+  return entry;
+}
+
+function logCrash() {
+  logbook.totals.crashes++;
+  logDirty = true;
+}
+
+function routeKey(from, to) {
+  return `${from.name.split(' ')[0]}>${to.name.split(' ')[0]}`;
+}
+
+function hoursText(seconds) {
+  const m = Math.floor(seconds / 60);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+}
+
+function averageGrade() {
+  const n = logbook.totals.landings;
+  if (!n) return '—';
+  const avg = logbook.totals.gradeSum / n;
+  const names = ['E', 'D', 'C', 'B', 'A', 'A+'];
+  return names[THREE.MathUtils.clamp(Math.round(avg) - 1, 0, 5)];
+}
+
+// ---------------------------------------------------------------------------
 // Missions — a flight from one field to another, by way of the gates
 // ---------------------------------------------------------------------------
 const ROUTE_GATES = 8;
@@ -2859,6 +2964,7 @@ function crash() {
   setWarn('CRASHED');
   flash();
   boom();
+  logCrash();
 }
 
 function updateHud() {
@@ -3154,6 +3260,17 @@ function completeMission(v) {
   }
   mrEl.best.textContent = record ? 'NEW BEST MISSION' : `BEST ${bestMission}`;
 
+  logFlight({
+    kind: 'mission',
+    route: routeKey(mission.origin, mission.dest),
+    from: mission.origin.name, field: mission.dest.name,
+    gates: gatesFlown, gatesTotal: mission.gatesTotal,
+    seconds: Math.round(mission.t),
+    landing: { score: v.score, grade: v.grade },
+    score: total, grade,
+    wx: weather.name, wind: `${windCompass()}/${Math.round(wind.speed)}`
+  });
+
   mrEl.panel.classList.add('on');
   missionPanelTimer = 9;
 
@@ -3184,6 +3301,13 @@ function touchDown(r, v) {
   }
 
   showLanding(v);
+
+  // A landing that is not the end of a mission still belongs in the book.
+  logFlight({
+    kind: 'landing', field: r.f.name, rwy: v.rwy,
+    landing: { score: v.score, grade: v.grade },
+    wx: weather.name, wind: `${windCompass()}/${Math.round(wind.speed)}`
+  });
 
   const remark = v.score >= 87 ? 'Nicely flown.'
                : v.score >= 60 ? 'Welcome in.'
@@ -3662,6 +3786,7 @@ window.SKYWARD = {
   preferredEnd, windsocks, updateWindsocks,
   mission, startMission, endMission, buildRouteCourse, placeOnRunway, updateMission, completeMission,
   progressAtStake, get pendingConfirm() { return pendingConfirm; },
+  logbook, logFlight, logCrash, saveLogbook, updateLogbook, hoursText, averageGrade, routeKey,
   get mapZoom() { return mapZoom; },
   get mapSpan() { return mapSpan; },
   get nextRing() { return nextRing; },
@@ -3684,6 +3809,7 @@ function tick() {
     updateRings(dt, t);
     updateChatter(dt);
     updateMission(dt);
+    updateLogbook(dt);
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) el.banner.classList.remove('on');
     if (landingPanelTimer > 0 && (landingPanelTimer -= dt) <= 0) ldEl.panel.classList.remove('on');
     if (missionPanelTimer > 0 && (missionPanelTimer -= dt) <= 0) mrEl.panel.classList.remove('on');
