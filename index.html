@@ -274,7 +274,7 @@
     <div class="row"><span class="k" id="lblGates">RINGS</span><span class="v big" id="rings">0/12</span></div>
     <div class="row"><span class="k">NEXT</span><span class="v" id="next">—</span></div>
     <div class="row"><span class="k">TIME</span><span class="v" id="time">0.0</span></div>
-    <div class="row"><span class="k">BEST</span><span class="v" id="best">—</span></div>
+    <div class="row"><span class="k" id="lblBest">BEST</span><span class="v" id="best">—</span></div>
   </div>
 
   <div class="panel" id="ils">
@@ -1560,6 +1560,11 @@ function startMission() {
   placeOnRunway(origin, end);
   state.time = 0;
 
+  const prevBest = logbook.routes[routeKey(origin, dest)];
+  if (prevBest !== undefined) {
+    setTimeout(() => atcToPlayer(`${PLAYER_CS}, your best on this route is ${prevBest}.`), 2600);
+  }
+
   atcToPlayer(`${PLAYER_CS}, cleared to ${dest.name} via ${mission.gatesTotal} gates. Runway ${end}, wind ${windCompass()} at ${Math.round(wind.speed)}, ${weather.name.toLowerCase()}, visibility ${visibilityText()}, ceiling ${feet(weather.ceiling)}. Cleared for takeoff.`);
   setBanner(`<b>${dest.name}</b>${mission.gatesTotal} GATES &middot; RUNWAY ${end}`, 4);
 }
@@ -1912,6 +1917,7 @@ const el = {
   rings: document.getElementById('rings'),
   misHdr: document.getElementById('misHdr'),
   lblGates: document.getElementById('lblGates'),
+  lblBest: document.getElementById('lblBest'),
   next: document.getElementById('next'),
   best: document.getElementById('best'),
   warn: document.getElementById('warn'),
@@ -3092,7 +3098,11 @@ function updateHud() {
     el.lblGates.textContent = 'GATES';
     el.rings.textContent = `${nextRing}/${mission.gatesTotal}`;
     el.time.textContent = mission.t.toFixed(1);
-    el.best.textContent = bestMission === null ? '—' : String(bestMission);
+    // Show the target that actually matters: your best on THIS route.
+    const rb = logbook.routes[routeKey(mission.origin, mission.dest)];
+    el.lblBest.textContent = rb === undefined ? 'BEST' : 'ROUTE';
+    el.best.textContent = rb !== undefined ? String(rb)
+                        : (bestMission === null ? '—' : String(bestMission));
 
     // Once the gates are done, the number that matters is range to the field.
     el.next.textContent = mission.phase === 'arrival' || courseDone
@@ -3103,6 +3113,7 @@ function updateHud() {
 
   el.misHdr.style.display = 'none';
   el.lblGates.textContent = 'RINGS';
+  el.lblBest.textContent = 'BEST';
   el.rings.textContent = `${nextRing}/${RING_COUNT}`;
   el.best.textContent = best ? best.toFixed(1) : '—';
   el.next.textContent = (ring && !courseDone)
