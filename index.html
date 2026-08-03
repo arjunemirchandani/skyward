@@ -103,6 +103,13 @@
     100% { opacity: 0; }
   }
 
+  #instPanel {
+    left: 50%; bottom: 18px; transform: translateX(-50%);
+    padding: 8px; line-height: 0; transition: opacity .25s;
+  }
+  #instPanel.hidden { opacity: 0; }
+  #inst { display: block; width: 300px; height: 116px; }
+
   #mapPanel { right: 18px; bottom: 18px; padding: 8px; line-height: 0; }
   #map { display: block; width: 188px; height: 188px; border-radius: 4px; }
   #mapScale {
@@ -240,6 +247,10 @@
   </div>
 
   <div id="radio"></div>
+
+  <div class="panel" id="instPanel">
+    <canvas id="inst" width="300" height="116"></canvas>
+  </div>
 
   <div class="panel" id="mapPanel">
     <canvas id="map" width="188" height="188"></canvas>
@@ -1993,6 +2004,126 @@ function onWarningChange(w) {
 }
 
 // ---------------------------------------------------------------------------
+// Instruments
+// ---------------------------------------------------------------------------
+// In cloud the outside world gives you nothing: no horizon, no ground, no sense
+// of which way is up. These are the instruments that replace it.
+const INST_W = 300, INST_H = 116;
+const instPanel = document.getElementById('instPanel');
+const instCanvas = document.getElementById('inst');
+const ix = instCanvas.getContext('2d');
+{
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  instCanvas.width = INST_W * dpr;
+  instCanvas.height = INST_H * dpr;
+  ix.scale(dpr, dpr);
+}
+
+const AI_CX = INST_W / 2, AI_CY = INST_H / 2, AI_R = 51;
+const PIX_PER_DEG = 1.55;
+
+const AI_SKY = '#3a7fbd';
+const AI_GROUND = '#7a5730';
+
+// Bank, positive rolling right. Pitch, positive nose up.
+function bankAngle() { return Math.atan2(-right.y, up.y); }
+function pitchAngle() { return Math.asin(THREE.MathUtils.clamp(fwd.y, -1, 1)); }
+
+function drawAttitude(bank, pitchDeg) {
+  ix.save();
+  ix.beginPath();
+  ix.arc(AI_CX, AI_CY, AI_R, 0, Math.PI * 2);
+  ix.clip();
+
+  ix.translate(AI_CX, AI_CY);
+  ix.rotate(-bank);                      // the world stays level, the case rolls
+
+  const off = pitchDeg * PIX_PER_DEG;    // nose up pushes the horizon down
+  const far = AI_R * 3;
+
+  ix.fillStyle = AI_SKY;
+  ix.fillRect(-far, off - far, far * 2, far);
+  ix.fillStyle = AI_GROUND;
+  ix.fillRect(-far, off, far * 2, far);
+
+  ix.strokeStyle = '#f2f8fc';
+  ix.lineWidth = 1.5;
+  ix.beginPath();
+  ix.moveTo(-far, off);
+  ix.lineTo(far, off);
+  ix.stroke();
+
+  // Pitch ladder.
+  ix.lineWidth = 1;
+  ix.strokeStyle = 'rgba(242,248,252,.85)';
+  ix.fillStyle = 'rgba(242,248,252,.85)';
+  ix.font = '600 7px ui-monospace, Menlo, monospace';
+  ix.textAlign = 'center';
+  ix.textBaseline = 'middle';
+  for (let d = -30; d <= 30; d += 10) {
+    if (d === 0) continue;
+    const y = off - d * PIX_PER_DEG;
+    const w = (d % 20 === 0) ? 17 : 10;
+    ix.beginPath();
+    ix.moveTo(-w, y); ix.lineTo(w, y);
+    ix.stroke();
+    if (d % 20 === 0) ix.fillText(String(Math.abs(d)), w + 9, y);
+  }
+  ix.restore();
+
+  // Bank scale on the fixed case, with a pointer that rolls with the horizon.
+  ix.save();
+  ix.translate(AI_CX, AI_CY);
+  ix.strokeStyle = 'rgba(205,246,255,.7)';
+  ix.lineWidth = 1;
+  for (const deg of [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60]) {
+    const a = -Math.PI / 2 + THREE.MathUtils.degToRad(deg);
+    const len = (deg % 30 === 0) ? 7 : 4;
+    ix.beginPath();
+    ix.moveTo(Math.cos(a) * AI_R, Math.sin(a) * AI_R);
+    ix.lineTo(Math.cos(a) * (AI_R - len), Math.sin(a) * (AI_R - len));
+    ix.stroke();
+  }
+
+  ix.rotate(-bank);
+  ix.fillStyle = '#ffd257';
+  ix.beginPath();
+  ix.moveTo(0, -AI_R + 2);
+  ix.lineTo(-4.5, -AI_R + 10);
+  ix.lineTo(4.5, -AI_R + 10);
+  ix.closePath();
+  ix.fill();
+  ix.restore();
+
+  // Fixed aircraft symbol — this is you, and it never moves.
+  ix.save();
+  ix.translate(AI_CX, AI_CY);
+  ix.strokeStyle = '#1a1e24';
+  ix.lineWidth = 3.4;
+  ix.beginPath();
+  ix.moveTo(-24, 0); ix.lineTo(-8, 0);
+  ix.moveTo(8, 0); ix.lineTo(24, 0);
+  ix.moveTo(0, -3); ix.lineTo(0, 3);
+  ix.stroke();
+  ix.strokeStyle = '#ffd257';
+  ix.lineWidth = 1.8;
+  ix.stroke();
+  ix.restore();
+
+  // Bezel.
+  ix.beginPath();
+  ix.arc(AI_CX, AI_CY, AI_R, 0, Math.PI * 2);
+  ix.strokeStyle = 'rgba(140,230,255,.35)';
+  ix.lineWidth = 1;
+  ix.stroke();
+}
+
+function drawInstruments() {
+  ix.clearRect(0, 0, INST_W, INST_H);
+  drawAttitude(bankAngle(), THREE.MathUtils.radToDeg(pitchAngle()));
+}
+
+// ---------------------------------------------------------------------------
 // Minimap
 // ---------------------------------------------------------------------------
 const MAP_SIZE = 188;                 // on-screen size, CSS pixels
@@ -3404,6 +3535,7 @@ window.SKYWARD = {
   state, plane, keys, camera, scene, THREE, terrainHeight, respawn,
   rings, buildCourse, newCourse,
   renderer, drawMap, cycleMapZoom, traffic, updateTraffic, newLeg,
+  drawInstruments, bankAngle, pitchAngle,
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, updateHud, updateMarker, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
@@ -3460,6 +3592,7 @@ function tick() {
   updateMarker();
   updateEngine();
   updateGlints();
+  drawInstruments();
   drawMap(t);
 
   renderer.render(scene, camera);
