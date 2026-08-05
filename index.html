@@ -1701,6 +1701,7 @@ respawn();
 // Audio — everything is synthesised, no asset files
 // ---------------------------------------------------------------------------
 let audio = null, master = null, engineGain = null, engineFilter = null, noiseBuf = null;
+let bedBuf = null, slipstream = null, rainLayer = null, rumbleLayer = null;
 const engineOscs = [];
 let muted = false;
 
@@ -1738,6 +1739,39 @@ function initAudio() {
   noiseBuf = audio.createBuffer(1, len, audio.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+
+  // A longer buffer for the continuous layers: a short loop of white noise has
+  // an audible period, and these never stop playing.
+  const bedLen = audio.sampleRate * 4;
+  bedBuf = audio.createBuffer(1, bedLen, audio.sampleRate);
+  const b = bedBuf.getChannelData(0);
+  for (let i = 0; i < bedLen; i++) b[i] = Math.random() * 2 - 1;
+
+  slipstream = noiseLayer('lowpass', 700, 0.7);
+  rainLayer = noiseLayer('highpass', 2400, 0.6);
+  rumbleLayer = noiseLayer('lowpass', 130, 1.1);
+}
+
+// One looping noise source through a filter and its own gain. Everything
+// continuous in the soundscape is built from these.
+function noiseLayer(type, freq, q) {
+  const src = audio.createBufferSource();
+  src.buffer = bedBuf;
+  src.loop = true;
+
+  const filter = audio.createBiquadFilter();
+  filter.type = type;
+  filter.frequency.value = freq;
+  filter.Q.value = q;
+
+  const gain = audio.createGain();
+  gain.gain.value = 0;
+
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(master);
+  src.start(0, Math.random() * 3);   // stagger so the layers do not phase-lock
+  return { src, filter, gain };
 }
 
 function updateEngine() {
@@ -1748,6 +1782,35 @@ function updateEngine() {
   const vol = muted || !state.started ? 0 : (state.crashed ? 0.01 : 0.05 + state.throttle * 0.09);
   engineGain.gain.setTargetAtTime(vol, now, 0.12);
   engineFilter.frequency.setTargetAtTime(420 + state.speed * 3.4, now, 0.15);
+}
+
+// The continuous soundscape: air over the airframe, rain on it, and whatever
+// is shaking it. All driven from live state, none of it looping samples.
+function updateSoundscape() {
+  if (!audio || !slipstream) return;
+  const now = audio.currentTime;
+  const live = (muted || !state.started) ? 0 : 1;
+
+  // Slipstream: louder and brighter the faster you go. This is what makes
+  // speed audible when the engine is at idle.
+  const sp = state.speed;
+  const rush = THREE.MathUtils.clamp((sp - 30) / 300, 0, 1);
+  slipstream.gain.gain.setTargetAtTime(live * rush * rush * 0.17, now, 0.12);
+  slipstream.filter.frequency.setTargetAtTime(360 + sp * 7.5, now, 0.16);
+
+  // Rain drums on the airframe, and is muffled inside cloud.
+  // Rain fades in slowly but must cut fast, or muting leaves it audible.
+  rainLayer.gain.gain.setTargetAtTime(live * weather.rain * 0.11, now, live ? 0.5 : 0.08);
+  rainLayer.filter.frequency.setTargetAtTime(2400 - cloudMix * 900, now, 0.5);
+
+  // Low rumble from rough air, the wheels, and the buffet before a stall.
+  const stall = state.onGround ? 0
+    : THREE.MathUtils.clamp((STALL_SPEED - sp) / STALL_SPEED, 0, 1);
+  const buffet = stall * (0.7 + 0.3 * Math.sin(now * 21));
+  const wheels = state.onGround ? THREE.MathUtils.clamp(sp / 130, 0, 1) : 0;
+  const shake = Math.max(turbLevel * 0.55, wheels * 0.8, buffet);
+  rumbleLayer.gain.gain.setTargetAtTime(live * shake * 0.16, now, 0.09);
+  rumbleLayer.filter.frequency.setTargetAtTime(state.onGround ? 190 : 130, now, 0.2);
 }
 
 function tone(freq, dur, vol, type = 'sine', delay = 0) {
@@ -3928,6 +3991,18 @@ window.SKYWARD = {
   drawInstruments, bankAngle, pitchAngle, instPanel,
   get turnRate() { return turnRate; },
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
+  updateSoundscape, initAudio,
+  get audioMix() {
+    if (!slipstream) return null;
+    return {
+      master: master.gain.value,
+      slipstream: +slipstream.gain.gain.value.toFixed(4),
+      slipstreamHz: Math.round(slipstream.filter.frequency.value),
+      rain: +rainLayer.gain.gain.value.toFixed(4),
+      rumble: +rumbleLayer.gain.gain.value.toFixed(4),
+      engine: +engineGain.gain.value.toFixed(4)
+    };
+  },
   airfields, baseTerrain, RUNWAY_LEN, RUNWAY_WID, runwayAt, judgeLanding, nearestAirfield,
   updateFlight, updateHud, updateMarker, approachInfo, updateApproach, updateGlints, glints, wind, updateWind, windCompass,
   get turbLevel() { return turbLevel; },
@@ -3985,6 +4060,7 @@ function tick() {
   updateApproach();
   updateMarker();
   updateEngine();
+  updateSoundscape();
   updateGlints();
   drawInstruments(dt);
   drawMap(t);
