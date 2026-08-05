@@ -1287,6 +1287,7 @@ function checkRing() {
   ring.mesh.material.emissiveIntensity = 2.2;
   nextRing++;
   chime(nextRing);
+  whoosh(state.speed);
 
   if (nextRing >= rings.length) {
     courseDone = true;
@@ -1856,6 +1857,68 @@ function squelch(isAtc) {
   src.connect(bp); bp.connect(g); g.connect(master);
   src.start(t0, Math.random() * 0.6);
   src.stop(t0 + 0.22);
+}
+
+// Wheels meeting tarmac: a low body thud plus tyre scrub, both scaled by how
+// hard the arrival was. This is the sound that tells you what you just did.
+let lastTransient = 0;
+function thump(strength) {
+  if (!audio || muted) return;
+  const t0 = audio.currentTime;
+  if (t0 - lastTransient < 0.05) return;      // never stack on a bouncy contact
+  lastTransient = t0;
+  const s = THREE.MathUtils.clamp(strength, 0, 1);
+
+  const o = audio.createOscillator();
+  const g = audio.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(115 + s * 70, t0);
+  o.frequency.exponentialRampToValueAtTime(38, t0 + 0.18);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(0.14 + s * 0.34, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0 + 0.36);
+
+  const src = audio.createBufferSource();
+  src.buffer = noiseBuf;
+  const f = audio.createBiquadFilter();
+  f.type = 'bandpass';
+  f.frequency.value = 1100 + s * 1000;
+  f.Q.value = 1.3;
+  const ng = audio.createGain();
+  ng.gain.setValueAtTime(0.0001, t0);
+  ng.gain.exponentialRampToValueAtTime(0.05 + s * 0.17, t0 + 0.02);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2 + s * 0.25);
+  src.connect(f); f.connect(ng); ng.connect(master);
+  src.start(t0, Math.random() * 0.5);
+  src.stop(t0 + 0.6);
+}
+
+// A gate going past: a band of noise sweeping up and back down, so speed is
+// audible at the moment it matters.
+function whoosh(speed) {
+  if (!audio || muted) return;
+  const t0 = audio.currentTime;
+  const s = THREE.MathUtils.clamp(speed / 300, 0.2, 1);
+
+  const src = audio.createBufferSource();
+  src.buffer = noiseBuf;
+  const f = audio.createBiquadFilter();
+  f.type = 'bandpass';
+  f.Q.value = 1.2;
+  f.frequency.setValueAtTime(320, t0);
+  f.frequency.exponentialRampToValueAtTime(1600 + s * 1800, t0 + 0.1);
+  f.frequency.exponentialRampToValueAtTime(340, t0 + 0.32);
+
+  const g = audio.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(0.05 + s * 0.13, t0 + 0.06);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
+
+  src.connect(f); f.connect(g); g.connect(master);
+  src.start(t0, Math.random() * 0.5);
+  src.stop(t0 + 0.4);
 }
 
 function boom() {
@@ -3504,6 +3567,8 @@ function touchDown(r, v) {
   plane.position.y = r.f.elev + 1.2;
   state.vel.y = 0;
 
+  // Sink rate is what decides how the arrival sounds, same as how it scores.
+  thump(v.sink / 26);
   chime(Math.max(1, Math.round(v.score / 12)));
 
   // Arriving where you were sent finishes the job; anywhere else is just a
@@ -3991,7 +4056,8 @@ window.SKYWARD = {
   drawInstruments, bankAngle, pitchAngle, instPanel,
   get turnRate() { return turnRate; },
   radio, emitChatter, reportingPoints, positionPhrase, nearestPoint, clockPosition, setTrafficCount,
-  updateSoundscape, initAudio,
+  updateSoundscape, initAudio, thump, whoosh,
+  get audioCtx() { return audio; }, get masterGain() { return master; },
   get audioMix() {
     if (!slipstream) return null;
     return {
