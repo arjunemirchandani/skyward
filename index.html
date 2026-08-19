@@ -2045,9 +2045,10 @@ const CHASE_OFFSET = new THREE.Vector3(0, 3.4, 15.5);
 // Close three-quarter view: over the shoulder and off to one side, with a
 // narrower lens. The far chase is the flying view; this one is for looking at
 // the aeroplane and at where you are.
-// Camera sits off the LEFT wing, which throws the aeroplane to the right of
-// frame and clear of the radio log in the top-left corner.
-const CLOSE_OFFSET = new THREE.Vector3(-7.5, 3.0, 15.0);
+// Directly behind, just closer and on a longer lens than the chase view. An
+// offset camera shows the airframe better but reads as permanent crab — the
+// same cue the game uses for drift — so it fights the flying. Centred wins.
+const CLOSE_OFFSET = new THREE.Vector3(0, 2.9, 15.0);
 const COCKPIT_OFFSET = new THREE.Vector3(0, 0.95, -0.4);
 
 function updateCamera(dt, fwd, up) {
