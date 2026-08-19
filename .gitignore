@@ -1,2 +1,7 @@
 .DS_Store
 node_modules/
+
+# Editor and local tool state — not useful to anyone cloning this.
+.idea/
+.vscode/
+.claude/settings.local.json
