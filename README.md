@@ -25,7 +25,9 @@ route, and a field to land at — or `N` for a free course from wherever you hap
 
 *Every flight is kept between sessions: hours, landings and their average grade, gates, crashes,
 fields visited, and your best score on each route. Flying a route you have flown before, the HUD
-shows that route's best rather than your overall best — the number you can actually beat.*
+shows that route's best rather than your overall best — the number you can actually beat. Behind
+it, an approach in rain at 3.2 km visibility — Center has just called the aircraft into cloud, and
+the panel on the right has added the ceiling and visibility to the wind.*
 
 ## Run it locally
 
