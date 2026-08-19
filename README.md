@@ -121,3 +121,9 @@ Two three.js gotchas this code deliberately works around:
 
 - `Object3D.lookAt` aims an object's **+Z** at the target, but the aircraft's nose and the flight model's forward vector are **−Z**. Respawn computes the yaw explicitly instead.
 - `lookAt` reads `matrixWorld`, which is stale until the next render — another reason not to use it right after moving an object.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Do what you like with it; a credit is welcome but not required.
+
+three.js is loaded from a CDN and carries its own MIT licence.
