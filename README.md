@@ -1,8 +1,15 @@
 # Skyward
 
-An arcade flight simulator in a single HTML file — [`index.html`](index.html). Three.js via CDN import map, no build step, no assets (terrain, clouds, and every sound are generated at runtime).
+An arcade flight simulator in a single HTML file — [`index.html`](index.html). Three.js via CDN
+import map, no build step, no assets: terrain, weather, traffic and every sound are generated at
+runtime.
 
-## Play
+### ▶ [Play it now — arjunemirchandani.github.io/skyward-flight-simulator](https://arjunemirchandani.github.io/skyward-flight-simulator/)
+
+Nothing to install. Press `B` for a mission — you start lined up on a runway, take off, fly a gate
+course that leads to another field, and are scored on how you arrive.
+
+## Run it locally
 
 The page uses ES modules, so it needs to be served rather than opened from `file://`:
 
@@ -11,6 +18,9 @@ python3 -m http.server 8123
 ```
 
 Then open http://localhost:8123.
+
+Needs a network connection on first load for the Three.js module (from unpkg). Everything else is
+self-contained — there is not a single asset file.
 
 ## Controls
 
@@ -121,6 +131,48 @@ Two three.js gotchas this code deliberately works around:
 
 - `Object3D.lookAt` aims an object's **+Z** at the target, but the aircraft's nose and the flight model's forward vector are **−Z**. Respawn computes the yaw explicitly instead.
 - `lookAt` reads `matrixWorld`, which is stale until the next render — another reason not to use it right after moving an object.
+
+## Hosting this on GitHub Pages
+
+Worth writing down, because a game like this needs no infrastructure at all — the whole deployment
+is *push to `main`*.
+
+**Cost is zero.** Pages is free for public repositories; only *private* repos need a paid plan. The
+soft limits are 1 GB of site size and 100 GB/month of bandwidth. This site is ~150 KB, and Three.js
+is fetched from unpkg rather than from Pages, so the bandwidth ceiling sits somewhere north of half
+a million plays a month.
+
+**Enabling it** is one API call, or Settings → Pages → deploy from `main` / root:
+
+```bash
+echo '{"source":{"branch":"main","path":"/"}}' | gh api -X POST repos/OWNER/REPO/pages --input -
+```
+
+There is no build step and no workflow file. Pages serves the repository root as static files, so
+committing an HTML file is the deploy.
+
+**Serving the root.** Because the game *is* `index.html`, Pages serves it directly and no redirect
+is needed. A project that keeps a descriptive filename — `game.html`, say — needs a small
+`index.html` that hands off, and it must carry the query string across:
+
+```js
+location.replace('game.html' + location.search + location.hash);
+```
+
+Dropping `location.search` is the easy mistake: every shared link silently loses its parameters and
+lands on the default, which looks like the app is broken rather than the redirect.
+
+**Your email is in the commit metadata.** Git records the author and committer address on every
+commit, and both are public the moment the repo is. Check with:
+
+```bash
+git log --format='%ae %ce' | sort -u
+```
+
+GitHub issues you an `ID+username@users.noreply.github.com` address to use instead. Rewriting
+history and force-pushing is *not* sufficient on its own — merged pull requests keep their original
+commits reachable under `refs/pull/N/head`, so confirm there are none with
+`git ls-remote origin 'refs/pull/*'` before assuming an address is gone.
 
 ## Licence
 
