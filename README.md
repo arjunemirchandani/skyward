@@ -9,6 +9,24 @@ runtime.
 Nothing to install. Press `B` for a mission — you start lined up on a runway, take off, fly a gate
 course that leads to another field, and are scored on how you arrive.
 
+![A red single-engine aircraft flying low over a green island ridge, blue sea and snow-capped mountains beyond, with the next gate marked ahead and the full HUD visible](docs/screenshots/gameplay.jpg)
+
+*En route to BRINE FIELD with the next gate 938 m ahead. Terrain, weather, the traffic on the
+radio and every sound are generated at runtime — there is not one asset file. The panel on the
+right is live approach guidance for the nearest field; the dials along the bottom are what you fly
+on when the cloud closes in.*
+
+![The Skyward title screen listing the controls over a dim view of the islands at altitude](docs/screenshots/title.jpg)
+
+*One key to start. `B` gives you a mission — a runway to take off from, a gate course laid along the
+route, and a field to land at — or `N` for a free course from wherever you happen to be.*
+
+![The logbook screen showing career totals and a table of recent flights with routes, weather and scores](docs/screenshots/logbook.jpg)
+
+*Every flight is kept between sessions: hours, landings and their average grade, gates, crashes,
+fields visited, and your best score on each route. Flying a route you have flown before, the HUD
+shows that route's best rather than your overall best — the number you can actually beat.*
+
 ## Run it locally
 
 The page uses ES modules, so it needs to be served rather than opened from `file://`:
