@@ -59,6 +59,8 @@
   #reticle:before { left: 0; right: 0; top: 50%; height: 1px; }
   #reticle:after  { top: 0; bottom: 0; left: 50%; width: 1px; }
 
+  /* `top` is set from the right panel's measured height at runtime — that panel
+     grows when a mission adds its header, and a fixed offset collides with it. */
   #ils {
     right: 18px; top: 132px; width: 132px; text-align: center;
     opacity: 0; transition: opacity .3s; pointer-events: none;
@@ -2096,6 +2098,7 @@ function setWarn(text) {
   }
 }
 
+let rightShape = null;
 let bannerTimer = 0;
 function setBanner(html, seconds) {
   el.banner.innerHTML = html;
@@ -2212,6 +2215,15 @@ function layoutHud() {
   const showing = !helpEl.classList.contains('hidden');
   const top = showing ? helpEl.offsetTop + helpEl.offsetHeight + 12 : 18;
   radioEl.style.top = `${top}px`;
+  stackRightColumn();
+}
+
+// The approach panel hangs off the bottom of the mission/rings panel, which
+// changes height when a mission adds its destination header.
+const rightPanel = document.getElementById('right');
+function stackRightColumn() {
+  const el = document.getElementById('ils');
+  if (el) el.style.top = `${rightPanel.offsetTop + rightPanel.offsetHeight + 12}px`;
 }
 
 function toggleHelp() {
@@ -3253,6 +3265,9 @@ function updateHud() {
 
   if (mission.active) {
     el.misHdr.style.display = 'block';
+    // Re-measure only when the header appears or its phase line changes.
+    const shape = `on:${mission.phase}`;
+    if (shape !== rightShape) { rightShape = shape; requestAnimationFrame(stackRightColumn); }
     el.misHdr.innerHTML = `${mission.dest.name}<b>${MISSION_PHASE[mission.phase] || ''}</b>`;
     el.lblGates.textContent = 'GATES';
     el.rings.textContent = `${nextRing}/${mission.gatesTotal}`;
@@ -3271,6 +3286,7 @@ function updateHud() {
   }
 
   el.misHdr.style.display = 'none';
+  if (rightShape !== 'off') { rightShape = 'off'; requestAnimationFrame(stackRightColumn); }
   el.lblGates.textContent = 'RINGS';
   el.lblBest.textContent = 'BEST';
   el.rings.textContent = `${nextRing}/${RING_COUNT}`;
