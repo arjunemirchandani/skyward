@@ -360,7 +360,7 @@
       <tr><td>A / D</td><td>roll left / right</td></tr>
       <tr><td>Q / E</td><td>rudder</td></tr>
       <tr><td>&uarr; / &darr;</td><td>throttle</td></tr>
-      <tr><td>C</td><td>chase / cockpit view</td></tr>
+      <tr><td>C</td><td>chase / close / cockpit view</td></tr>
       <tr><td>R</td><td>respawn</td></tr>
       <tr><td>B</td><td>new mission</td></tr>
       <tr><td>N / M</td><td>free gate course / mute</td></tr>
@@ -2005,7 +2005,7 @@ addEventListener('keydown', (e) => {
       respawn();
     }
   }
-  if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 2;
+  if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 3;
   if (e.code === 'KeyM') { muted = !muted; setBanner(muted ? 'SOUND OFF' : 'SOUND ON', 0.9); }
   if (e.code === 'KeyN') guarded('KeyN', 'N', () => { endMission(); newCourse(); });
   if (e.code === 'KeyB') guarded('KeyB', 'B', startMission);
@@ -2036,29 +2036,39 @@ startEl.addEventListener('click', startGame);
 // ---------------------------------------------------------------------------
 // Camera
 // ---------------------------------------------------------------------------
-let cameraMode = 0; // 0 chase, 1 cockpit
+let cameraMode = 0; // 0 chase, 1 close, 2 cockpit
 const camPos = new THREE.Vector3();
 const camUp = new THREE.Vector3(0, 1, 0);
 const lookAt = new THREE.Vector3();
 
 const CHASE_OFFSET = new THREE.Vector3(0, 3.4, 15.5);
+// Close three-quarter view: over the shoulder and off to one side, with a
+// narrower lens. The far chase is the flying view; this one is for looking at
+// the aeroplane and at where you are.
+// Camera sits off the LEFT wing, which throws the aeroplane to the right of
+// frame and clear of the radio log in the top-left corner.
+const CLOSE_OFFSET = new THREE.Vector3(-7.5, 3.0, 15.0);
 const COCKPIT_OFFSET = new THREE.Vector3(0, 0.95, -0.4);
 
 function updateCamera(dt, fwd, up) {
-  if (cameraMode === 1) {
+  if (cameraMode === 2) {
     camera.position.copy(plane.localToWorld(COCKPIT_OFFSET.clone()));
     camera.quaternion.copy(plane.quaternion);
   } else {
-    const target = plane.localToWorld(CHASE_OFFSET.clone());
-    const k = 1 - Math.exp(-7 * dt);
+    const close = cameraMode === 1;
+    const target = plane.localToWorld((close ? CLOSE_OFFSET : CHASE_OFFSET).clone());
+    // The close view follows harder, so the aircraft stays put in frame.
+    const k = 1 - Math.exp(-(close ? 22 : 7) * dt);
     camera.position.lerp(target, k);
     // Blend the roll in so banking reads on screen without making it nauseating.
-    camUp.lerp(up.clone().lerp(new THREE.Vector3(0, 1, 0), 0.35).normalize(), k);
+    camUp.lerp(up.clone().lerp(new THREE.Vector3(0, 1, 0), close ? 0.2 : 0.35).normalize(), k);
     camera.up.copy(camUp);
-    lookAt.copy(plane.position).addScaledVector(fwd, 26);
+    // A shorter lead keeps the aeroplane in shot rather than the horizon.
+    lookAt.copy(plane.position).addScaledVector(fwd, close ? 9 : 26);
     camera.lookAt(lookAt);
   }
-  const targetFov = (cameraMode === 1 ? 68 : 60) + (state.speed / MAX_SPEED) * 16;
+  const baseFov = cameraMode === 2 ? 68 : cameraMode === 1 ? 46 : 60;
+  const targetFov = baseFov + (state.speed / MAX_SPEED) * 16;
   camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-4 * dt));
   camera.updateProjectionMatrix();
 }

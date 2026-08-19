@@ -30,7 +30,7 @@ self-contained — there is not a single asset file.
 | `A` / `D` | Roll left / right |
 | `Q` / `E` | Rudder |
 | `↑` / `↓` | Throttle |
-| `C` | Chase / cockpit camera |
+| `C` | Camera — chase, close, cockpit |
 | `R` | Respawn |
 | `B` | New mission (asks first if a flight is underway) |
 | `N` | Free gate course (same) |
